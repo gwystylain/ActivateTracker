@@ -6,11 +6,16 @@ import secrets
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
+from typing import TYPE_CHECKING
 
 import bcrypt
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
-from .config import AppConfig
+if TYPE_CHECKING:
+    # Importing config eagerly would pull in PyYAML, which the hashpw CLI
+    # tool does not need. Keep this behind TYPE_CHECKING since AppConfig
+    # is only used as a type hint here.
+    from .config import AppConfig
 
 LOGIN_WINDOW_SECONDS = 300
 LOGIN_MAX_ATTEMPTS = 5
