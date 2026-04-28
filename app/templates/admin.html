@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% set logged_in = True %}
+{% block title %}Admin · activateTracker{% endblock %}
+{% block content %}
+<section class="card">
+    <div class="card-header">
+        <h1>Admin</h1>
+        <form method="post" action="/admin/refresh" class="inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit">Refresh all now</button>
+        </form>
+    </div>
+    {% if request.query_params.get('refreshed') %}
+        <p class="ok">Refresh started in background. Reload the public page in a few seconds.</p>
+    {% endif %}
+
+    <h2>Tracked players</h2>
+    {% if players %}
+    <table class="data">
+        <thead>
+            <tr>
+                <th>Handle</th>
+                <th>Display name</th>
+                <th>Initial streak</th>
+                <th>Locations (id, slug)</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in players %}
+            <tr>
+                <td><code>{{ p.handle }}</code></td>
+                <td>{{ p.display_name or '' }}</td>
+                <td>{{ p.initial_streak }}{% if p.initial_streak_set_at %} <span class="muted small">(set {{ p.initial_streak_set_at }})</span>{% endif %}</td>
+                <td>
+                    {% for loc in p.locations %}
+                        <div><code>{{ loc.location_id }}, {{ loc.slug }}</code></div>
+                    {% endfor %}
+                </td>
+                <td>
+                    <form method="post" action="/admin/players/{{ p.id }}/delete" class="inline" onsubmit="return confirm('Remove {{ p.handle }} and all its data?');">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button type="submit" class="danger">Remove</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+        <p class="muted">No players tracked yet.</p>
+    {% endif %}
+</section>
+
+<section class="card">
+    <h2>Add player</h2>
+    <form method="post" action="/admin/players">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>
+            <span>Handle (URL slug)</span>
+            <input type="text" name="handle" required placeholder="gmebagholder">
+        </label>
+        <label>
+            <span>Display name (optional)</span>
+            <input type="text" name="display_name" placeholder="GMEbagholder">
+        </label>
+        <label>
+            <span>Initial streak (visits already accumulated, 0&ndash;5)</span>
+            <input type="number" name="initial_streak" min="0" max="20" value="0">
+        </label>
+        <label>
+            <span>Locations &mdash; one per line, format <code>id,slug</code></span>
+            <textarea name="locations" rows="4" required placeholder="72,langley&#10;38,coquitlam"></textarea>
+        </label>
+        <button type="submit">Add player</button>
+    </form>
+</section>
+{% endblock %}

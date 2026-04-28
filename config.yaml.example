@@ -1,0 +1,32 @@
+# activateTracker config.
+# Copy to config.yaml, fill in real values, then `docker compose up -d`.
+
+admin:
+  username: admin
+  # Generate with: docker compose run --rm activatetracker python -m app.tools.hashpw
+  # (or, locally:) python -m app.tools.hashpw
+  # Paste the resulting bcrypt hash here. NEVER commit a real value.
+  password_bcrypt: "REPLACE_ME_WITH_BCRYPT_HASH"
+
+session:
+  # Generate with: python -c "import secrets; print(secrets.token_hex(32))"
+  # Rotating this value invalidates all existing sessions.
+  secret_key: "REPLACE_ME_WITH_64_HEX_CHARS"
+  cookie_name: "atrk_session"
+  max_age_hours: 24
+
+poll:
+  # "daily"  - run once a day at hour_utc
+  # "manual" - never auto-poll (button only)
+  # cron     - 5-field crontab, e.g. "0 11 * * *"
+  schedule: "daily"
+  hour_utc: 11                # 11:00 UTC ~= 04:00 Pacific
+  request_timeout_sec: 20
+  jitter_seconds: [0.5, 2.0]  # min/max random delay between requests
+  user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+
+server:
+  # Number of trusted reverse-proxy hops in front of the app (e.g. nginx-proxy-manager = 1).
+  trusted_proxy_hops: 1
+  # Comma-separated CIDRs/IPs uvicorn will accept X-Forwarded-* from. "*" = all (only if behind a trusted proxy).
+  forwarded_allow_ips: "*"

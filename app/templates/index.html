@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Scores · activateTracker{% endblock %}
+{% block content %}
+<section class="card">
+    <div class="card-header">
+        <h1>Player scores over time</h1>
+        {% if logged_in %}
+            <form method="post" action="/admin/refresh" class="inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit">Refresh now</button>
+            </form>
+        {% endif %}
+    </div>
+    {% if players %}
+        <div class="chart-wrap">
+            <canvas id="scoresChart" height="120"></canvas>
+        </div>
+    {% else %}
+        <p class="muted">No tracked players yet. {% if logged_in %}Add one in <a href="/admin">Admin</a>.{% endif %}</p>
+    {% endif %}
+</section>
+
+{% if players %}
+<section class="card">
+    <h2>Streak summary</h2>
+    <div class="table-wrap">
+    <table class="data">
+        <thead>
+            <tr>
+                <th>Player</th>
+                <th>Days since last visit</th>
+                <th>Current streak</th>
+                <th>Discount</th>
+                <th>This month</th>
+                <th>YTD</th>
+                {% for y in history_years[1:] %}
+                    <th>{{ y }}</th>
+                {% endfor %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in players %}
+            <tr>
+                <td>{{ p.display_name }}</td>
+                <td>
+                    {% if p.days_since_last_visit is none %}
+                        &mdash;
+                    {% else %}
+                        {{ p.days_since_last_visit }}
+                    {% endif %}
+                </td>
+                <td>{{ p.current_streak }}</td>
+                <td>{{ p.discount_pct }}%</td>
+                <td>{{ p.visits_this_month }}</td>
+                <td>{{ p.visits_ytd }}</td>
+                {% for y in history_years[1:] %}
+                    <td>{{ p.visits_by_year.get(y, 0) }}</td>
+                {% endfor %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    <p class="muted small">As of {{ today }} (UTC). Streak resets after 30 days without a visit. Discount caps at 25%.</p>
+</section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if players %}
+<script src="/static/chart.umd.min.js"></script>
+<script src="/static/app.js"></script>
+{% endif %}
+{% endblock %}
