@@ -30,14 +30,18 @@
     const fmt = new Intl.NumberFormat();
 
     const datasets = players.map((p, i) => {
+        // Dates this player's score actually moved. Used to decide which
+        // x positions get a visible dot — others are forward-filled for
+        // tooltip continuity but rendered with radius 0.
+        const changeDates = new Set(p.points.map(pt => pt.date));
         const byDate = new Map(p.points.map(pt => [pt.date, pt]));
-        // Forward-fill the whole point object so the tooltip can find a
-        // location breakdown even on days this player wasn't polled.
         let last = null;
         const data = labels.map(d => {
             if (byDate.has(d)) last = byDate.get(d);
             return last ? { x: d, y: last.total_score, locations: last.locations } : null;
         });
+        const pointRadius = labels.map(d => (changeDates.has(d) ? 3 : 0));
+        const pointHoverRadius = pointRadius.map(r => (r > 0 ? r + 2 : 0));
         return {
             label: p.display_name,
             data,
@@ -45,7 +49,8 @@
             backgroundColor: palette[i % palette.length] + '33',
             tension: 0.15,
             spanGaps: true,
-            pointRadius: 2,
+            pointRadius,
+            pointHoverRadius,
             parsing: false,
         };
     });

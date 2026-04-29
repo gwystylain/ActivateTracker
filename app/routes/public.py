@@ -89,10 +89,17 @@ async def chart_data(request: Request) -> JSONResponse:
         pid = handle_to_player_id[handle]
         # Forward-fill per-location scores so each day's breakdown reflects all
         # locations the player has ever scored at, not just ones polled that day.
+        # Only emit a point when total_score actually moved (or it's the first
+        # observation) — otherwise the chart accumulates a daily dot for every
+        # poll even on uneventful days.
         carry: dict[int, int] = {}
         points: list[dict[str, Any]] = []
+        last_total: int | None = None
         for day in sorted(days):
             carry.update(days[day])
+            total = sum(carry.values())
+            if last_total is not None and total == last_total:
+                continue
             breakdown = {
                 loc_slug.get((pid, loc_id), f"loc-{loc_id}"): score
                 for loc_id, score in sorted(carry.items())
@@ -100,10 +107,11 @@ async def chart_data(request: Request) -> JSONResponse:
             points.append(
                 {
                     "date": day,
-                    "total_score": sum(carry.values()),
+                    "total_score": total,
                     "locations": breakdown,
                 }
             )
+            last_total = total
         payload.append(
             {
                 "handle": handle,
