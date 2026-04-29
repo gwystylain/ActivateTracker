@@ -85,9 +85,9 @@
                         afterLabel(ctx) {
                             const locs = ctx.raw && ctx.raw.locations;
                             if (!locs) return '';
-                            const lines = Object.entries(locs).map(
-                                ([slug, score]) => `  ${slug}: ${fmt.format(score)}`
-                            );
+                            const lines = Object.entries(locs)
+                                .filter(([, score]) => score > 0)
+                                .map(([slug, score]) => `  ${slug}: ${fmt.format(score)}`);
                             return lines;
                         },
                     },
