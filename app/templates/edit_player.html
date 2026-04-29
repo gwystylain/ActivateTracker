@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% set logged_in = True %}
+{% block title %}Edit {{ player.handle }} · activateTracker{% endblock %}
+{% block content %}
+<section class="card">
+    <div class="card-header">
+        <h1>Edit player</h1>
+        <a href="/admin">&larr; Back to admin</a>
+    </div>
+    <form method="post" action="/admin/players/{{ player.id }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>
+            <span>Handle (URL slug)</span>
+            <input type="text" name="handle" required value="{{ player.handle }}">
+        </label>
+        <label>
+            <span>Display name (optional)</span>
+            <input type="text" name="display_name" value="{{ player.display_name or '' }}">
+        </label>
+        <label>
+            <span>Initial streak (changing this resets the 30-day baseline to today)</span>
+            <input type="number" name="initial_streak" min="0" max="20" value="{{ player.initial_streak }}">
+            {% if player.initial_streak_set_at %}
+                <span class="muted small">Current baseline: {{ player.initial_streak_set_at }}</span>
+            {% endif %}
+        </label>
+        <label>
+            <span>Locations &mdash; one per line, format <code>id,slug</code>. Removing a line stops polling that location; existing snapshots and visits are preserved.</span>
+            <textarea name="locations" rows="6" required>{{ locations_text }}</textarea>
+        </label>
+        <button type="submit">Save changes</button>
+    </form>
+</section>
+{% endblock %}

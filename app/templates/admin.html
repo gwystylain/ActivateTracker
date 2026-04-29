@@ -37,7 +37,8 @@
                         <div><code>{{ loc.location_id }}, {{ loc.slug }}</code></div>
                     {% endfor %}
                 </td>
-                <td>
+                <td class="actions">
+                    <a class="button-link" href="/admin/players/{{ p.id }}/edit">Edit</a>
                     <form method="post" action="/admin/players/{{ p.id }}/delete" class="inline" onsubmit="return confirm('Remove {{ p.handle }} and all its data?');">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                         <button type="submit" class="danger">Remove</button>
