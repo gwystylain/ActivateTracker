@@ -27,13 +27,16 @@
     for (const p of players) for (const pt of p.points) dateSet.add(pt.date);
     const labels = Array.from(dateSet).sort();
 
+    const fmt = new Intl.NumberFormat();
+
     const datasets = players.map((p, i) => {
-        const byDate = new Map(p.points.map(pt => [pt.date, pt.total_score]));
-        // Forward-fill so the line is continuous across dates where this player wasn't polled.
+        const byDate = new Map(p.points.map(pt => [pt.date, pt]));
+        // Forward-fill the whole point object so the tooltip can find a
+        // location breakdown even on days this player wasn't polled.
         let last = null;
         const data = labels.map(d => {
             if (byDate.has(d)) last = byDate.get(d);
-            return last;
+            return last ? { x: d, y: last.total_score, locations: last.locations } : null;
         });
         return {
             label: p.display_name,
@@ -43,6 +46,7 @@
             tension: 0.15,
             spanGaps: true,
             pointRadius: 2,
+            parsing: false,
         };
     });
 
@@ -61,7 +65,24 @@
             },
             plugins: {
                 legend: { labels: { color: '#e6edf3' } },
-                tooltip: { mode: 'nearest', intersect: false },
+                tooltip: {
+                    mode: 'nearest',
+                    intersect: false,
+                    callbacks: {
+                        label(ctx) {
+                            const total = ctx.parsed.y;
+                            return `${ctx.dataset.label}: ${fmt.format(total)}`;
+                        },
+                        afterLabel(ctx) {
+                            const locs = ctx.raw && ctx.raw.locations;
+                            if (!locs) return '';
+                            const lines = Object.entries(locs).map(
+                                ([slug, score]) => `  ${slug}: ${fmt.format(score)}`
+                            );
+                            return lines;
+                        },
+                    },
+                },
             },
         },
     });

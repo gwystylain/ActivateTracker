@@ -50,6 +50,7 @@ async def chart_data(request: Request) -> JSONResponse:
         """
         SELECT p.handle           AS handle,
                p.display_name     AS display_name,
+               s.player_id        AS player_id,
                s.location_id      AS location_id,
                s.polled_at        AS polled_at,
                s.total_score      AS total_score
@@ -59,27 +60,50 @@ async def chart_data(request: Request) -> JSONResponse:
         """
     ).fetchall()
 
-    # Group by handle. For each (handle, day), sum the latest total_score per location.
+    # location_id -> slug, looked up from current tracked locations. Snapshots
+    # for a (player, location) pair whose row has since been removed will fall
+    # back to "loc-<id>" in the breakdown.
+    loc_slug = {
+        (r["player_id"], r["location_id"]): r["slug"]
+        for r in conn.execute(
+            "SELECT player_id, location_id, slug FROM player_locations"
+        ).fetchall()
+    }
+
+    # Group by handle. For each (handle, day), record the latest total_score per location.
     per_handle_per_day_per_loc: dict[str, dict[str, dict[int, int]]] = defaultdict(
         lambda: defaultdict(dict)
     )
     display_name_for: dict[str, str | None] = {}
+    handle_to_player_id: dict[str, int] = {}
 
     for r in rows:
         handle = r["handle"]
         display_name_for[handle] = r["display_name"]
-        day = r["polled_at"][:10]  # YYYY-MM-DD
-        # Last write wins per (day, location) because rows are ordered by polled_at ASC.
+        handle_to_player_id[handle] = r["player_id"]
+        day = r["polled_at"][:10]
         per_handle_per_day_per_loc[handle][day][r["location_id"]] = r["total_score"]
 
     payload: list[dict[str, Any]] = []
     for handle, days in per_handle_per_day_per_loc.items():
-        # Forward-fill location totals so the per-day sum reflects all known locations.
+        pid = handle_to_player_id[handle]
+        # Forward-fill per-location scores so each day's breakdown reflects all
+        # locations the player has ever scored at, not just ones polled that day.
         carry: dict[int, int] = {}
         points: list[dict[str, Any]] = []
         for day in sorted(days):
             carry.update(days[day])
-            points.append({"date": day, "total_score": sum(carry.values())})
+            breakdown = {
+                loc_slug.get((pid, loc_id), f"loc-{loc_id}"): score
+                for loc_id, score in sorted(carry.items())
+            }
+            points.append(
+                {
+                    "date": day,
+                    "total_score": sum(carry.values()),
+                    "locations": breakdown,
+                }
+            )
         payload.append(
             {
                 "handle": handle,
