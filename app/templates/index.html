@@ -41,7 +41,9 @@
         <tbody>
             {% for p in players %}
             <tr>
-                <td>{{ p.display_name }}</td>
+                <td>
+                    {{ p.display_name }}{% if p.handle != p.display_name %} <span class="muted small">({{ p.handle }})</span>{% endif %}
+                </td>
                 <td>
                     {% if p.days_since_last_visit is none %}
                         &mdash;

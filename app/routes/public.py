@@ -112,10 +112,13 @@ async def chart_data(request: Request) -> JSONResponse:
                 }
             )
             last_total = total
+        display = display_name_for.get(handle) or handle
+        legend_label = display if display == handle else f"{display} ({handle})"
         payload.append(
             {
                 "handle": handle,
-                "display_name": display_name_for.get(handle) or handle,
+                "display_name": display,
+                "legend_label": legend_label,
                 "points": points,
             }
         )
