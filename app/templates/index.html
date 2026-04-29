@@ -22,7 +22,7 @@
 
 {% if players %}
 <section class="card">
-    <h2>Streak summary</h2>
+    <h2>Player summary</h2>
     <div class="table-wrap">
     <table class="data">
         <thead>
@@ -31,11 +31,8 @@
                 <th>Days since last visit</th>
                 <th>Current streak</th>
                 <th>Discount</th>
-                <th>This month</th>
-                <th>YTD</th>
-                {% for y in history_years[1:] %}
-                    <th>{{ y }}</th>
-                {% endfor %}
+                <th>Visits this month</th>
+                <th>Visits this year</th>
             </tr>
         </thead>
         <tbody>
@@ -55,9 +52,6 @@
                 <td>{{ p.discount_pct }}%</td>
                 <td>{{ p.visits_this_month }}</td>
                 <td>{{ p.visits_ytd }}</td>
-                {% for y in history_years[1:] %}
-                    <td>{{ p.visits_by_year.get(y, 0) }}</td>
-                {% endfor %}
             </tr>
             {% endfor %}
         </tbody>
