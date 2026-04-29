@@ -43,7 +43,7 @@
         const pointRadius = labels.map(d => (changeDates.has(d) ? 3 : 0));
         const pointHoverRadius = pointRadius.map(r => (r > 0 ? r + 2 : 0));
         return {
-            label: p.legend_label || p.display_name,
+            label: p.display_name,
             data,
             borderColor: palette[i % palette.length],
             backgroundColor: palette[i % palette.length] + '33',
@@ -69,7 +69,11 @@
                      beginAtZero: false },
             },
             plugins: {
-                legend: { labels: { color: '#e6edf3' } },
+                legend: {
+                    position: 'right',
+                    align: 'start',
+                    labels: { color: '#e6edf3', boxWidth: 14 },
+                },
                 tooltip: {
                     mode: 'nearest',
                     intersect: false,
