@@ -35,23 +35,30 @@
         // tooltip continuity but rendered with radius 0.
         const changeDates = new Set(p.points.map(pt => pt.date));
         const byDate = new Map(p.points.map(pt => [pt.date, pt]));
+        // Plain numeric data array (compatible with the category x-axis) plus
+        // a parallel side-channel for the per-location breakdown. The tooltip
+        // looks up locationsByIndex[ctx.dataIndex] rather than relying on
+        // Chart.js to carry custom fields through the parsing pipeline.
         let last = null;
-        const data = labels.map(d => {
+        const data = [];
+        const locationsByIndex = [];
+        labels.forEach(d => {
             if (byDate.has(d)) last = byDate.get(d);
-            return last ? { x: d, y: last.total_score, locations: last.locations } : null;
+            data.push(last ? last.total_score : null);
+            locationsByIndex.push(last ? last.locations : null);
         });
         const pointRadius = labels.map(d => (changeDates.has(d) ? 3 : 0));
         const pointHoverRadius = pointRadius.map(r => (r > 0 ? r + 2 : 0));
         return {
             label: p.display_name,
             data,
+            locationsByIndex,
             borderColor: palette[i % palette.length],
             backgroundColor: palette[i % palette.length] + '33',
             tension: 0.15,
             spanGaps: true,
             pointRadius,
             pointHoverRadius,
-            parsing: false,
         };
     });
 
@@ -79,12 +86,12 @@
                             return `${ctx.dataset.label}: ${fmt.format(total)}`;
                         },
                         afterLabel(ctx) {
-                            const locs = ctx.raw && ctx.raw.locations;
+                            const lookup = ctx.dataset.locationsByIndex;
+                            const locs = lookup && lookup[ctx.dataIndex];
                             if (!locs) return '';
-                            const lines = Object.entries(locs).map(
+                            return Object.entries(locs).map(
                                 ([slug, score]) => `  ${slug}: ${fmt.format(score)}`
                             );
-                            return lines;
                         },
                     },
                 },
