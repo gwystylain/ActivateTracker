@@ -58,7 +58,7 @@
     <form method="post" action="/admin/players">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label>
-            <span>Handle (URL slug)</span>
+            <span>Handle(s) &mdash; URL slug. Comma-separate to combine multiple profiles into one tracked player (e.g. <code>stebb, stevo</code>).</span>
             <input type="text" name="handle" required placeholder="gmebagholder">
         </label>
         <label>

@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import pytest
 
 from app import db as db_mod
-from app.poller import persist_snapshot
+from app.poller import format_handles, parse_handles, persist_snapshot
 from app.scraper import ScrapeResult
 
 
@@ -98,6 +98,18 @@ def test_visits_isolated_per_location(tmp_path):
     assert inserted is True
     visits = conn.execute("SELECT location_id FROM visits").fetchall()
     assert [v["location_id"] for v in visits] == [72]
+
+
+def test_parse_handles_dedupes_strips_lowercases():
+    assert parse_handles("  Stebb,  STEVO  ,stebb,") == ["stebb", "stevo"]
+    assert parse_handles("") == []
+    assert parse_handles("   ") == []
+    assert parse_handles("alpha") == ["alpha"]
+
+
+def test_format_handles_canonical_form():
+    assert format_handles(["stebb", "stevo"]) == "stebb, stevo"
+    assert format_handles(["solo"]) == "solo"
 
 
 def test_cascade_delete_removes_snapshots_and_visits(tmp_path):

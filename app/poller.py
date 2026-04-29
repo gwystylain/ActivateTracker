@@ -21,6 +21,28 @@ log = logging.getLogger(__name__)
 _poll_lock = asyncio.Lock()
 
 
+def parse_handles(raw: str) -> list[str]:
+    """Parse a comma-separated handle string into a deduped, lowercase list.
+
+    Whitespace is stripped per item. Empty items and exact duplicates are
+    discarded. Order is preserved (first occurrence wins).
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for part in (raw or "").split(","):
+        h = part.strip().lower()
+        if not h or h in seen:
+            continue
+        seen.add(h)
+        out.append(h)
+    return out
+
+
+def format_handles(handles: list[str]) -> str:
+    """Canonical storage form: comma + space separated."""
+    return ", ".join(handles)
+
+
 async def poll_all(conn: sqlite3.Connection, poll_cfg: PollConfig) -> dict[str, int]:
     """Poll every tracked (player, location). Returns counters for logging.
 
@@ -49,28 +71,39 @@ async def poll_all(conn: sqlite3.Connection, poll_cfg: PollConfig) -> dict[str, 
             return counters
 
         jitter_lo, jitter_hi = poll_cfg.jitter_seconds
+        first_request = True
 
         async with AsyncSession() as session:
-            for i, row in enumerate(rows):
-                if i > 0:
-                    await asyncio.sleep(random.uniform(jitter_lo, jitter_hi))
-                try:
-                    result = await scraper.fetch(
-                        row["handle"],
-                        row["location_id"],
-                        row["slug"],
-                        session=session,
-                        timeout=poll_cfg.request_timeout_sec,
-                    )
-                except (RequestException, scraper.ScrapeError, scraper.FetchError) as e:
-                    counters["errors"] += 1
-                    log.warning(
-                        "poll failed handle=%s location=%s err=%s",
-                        row["handle"], row["location_id"], e,
-                    )
+            for row in rows:
+                handles = parse_handles(row["handle"])
+                results: list[scraper.ScrapeResult] = []
+                for handle in handles:
+                    if not first_request:
+                        await asyncio.sleep(random.uniform(jitter_lo, jitter_hi))
+                    first_request = False
+                    try:
+                        results.append(
+                            await scraper.fetch(
+                                handle,
+                                row["location_id"],
+                                row["slug"],
+                                session=session,
+                                timeout=poll_cfg.request_timeout_sec,
+                            )
+                        )
+                    except (RequestException, scraper.ScrapeError, scraper.FetchError) as e:
+                        counters["errors"] += 1
+                        log.warning(
+                            "poll failed handle=%s location=%s err=%s",
+                            handle, row["location_id"], e,
+                        )
+                        continue
+
+                if not results:
                     continue
 
-                inserted_visit = persist_snapshot(conn, row["player_id"], result)
+                combined = scraper.combine_results(results)
+                inserted_visit = persist_snapshot(conn, row["player_id"], combined)
                 counters["polled"] += 1
                 counters["snapshots"] += 1
                 if inserted_visit:

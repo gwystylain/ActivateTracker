@@ -159,3 +159,44 @@ async def fetch(
 
 class FetchError(Exception):
     """Raised when the HTTP request itself fails (status, connection, timeout)."""
+
+
+def combine_results(results: list[ScrapeResult]) -> ScrapeResult:
+    """Sum scores across multiple handles for the same (player, location).
+
+    Used when one tracked player has multiple Activate profiles (typed in
+    the admin form as a comma-separated handle list). Totals are summed,
+    leaderboard ranks take the best (lowest) value, and the per-game scores
+    list is dropped — it isn't displayed and merging it across profiles
+    would be ambiguous.
+    """
+    if not results:
+        raise ValueError("combine_results requires at least one ScrapeResult")
+    if len(results) == 1:
+        return results[0]
+
+    base = results[0]
+
+    def _best(values: list[int | None]) -> int | None:
+        nonempty = [v for v in values if v is not None]
+        return min(nonempty) if nonempty else None
+
+    def _sum(values: list[int | None]) -> int | None:
+        nonempty = [v for v in values if v is not None]
+        return sum(nonempty) if nonempty else None
+
+    return ScrapeResult(
+        handle=",".join(r.handle for r in results),
+        location_id=base.location_id,
+        location_slug=base.location_slug,
+        player_name=results[0].player_name,
+        player_rank=_best([r.player_rank for r in results]),
+        stars=_sum([r.stars for r in results]),
+        coins=_sum([r.coins for r in results]),
+        location_player_rank=_best([r.location_player_rank for r in results]),
+        yearly_rank=_best([r.yearly_rank for r in results]),
+        standing=_best([r.standing for r in results]),
+        total_score=sum(r.total_score for r in results),
+        yearly_score=sum(r.yearly_score for r in results),
+        scores=[],
+    )

@@ -10,7 +10,7 @@
     <form method="post" action="/admin/players/{{ player.id }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label>
-            <span>Handle (URL slug)</span>
+            <span>Handle(s) &mdash; URL slug. Comma-separate to combine multiple profiles into one tracked player; their per-location and total scores are summed.</span>
             <input type="text" name="handle" required value="{{ player.handle }}">
         </label>
         <label>

@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from .. import auth, poller
 from ..db import transaction
+from ..poller import format_handles, parse_handles
 
 router = APIRouter()
 
@@ -70,9 +71,10 @@ async def add_player(
     _require_session(request)
     conn = request.app.state.db
 
-    handle = handle.strip()
-    if not handle:
+    handles = parse_handles(handle)
+    if not handles:
         raise HTTPException(400, "handle is required")
+    canonical_handle = format_handles(handles)
 
     parsed_locations = _parse_locations(locations)
     if not parsed_locations:
@@ -93,7 +95,7 @@ async def add_player(
                 VALUES (?, ?, ?, ?)
                 """,
                 (
-                    handle,
+                    canonical_handle,
                     display_name.strip() or None,
                     max(0, int(initial_streak)),
                     today if initial_streak > 0 else None,
@@ -156,9 +158,10 @@ async def update_player(
     _require_session(request)
     conn = request.app.state.db
 
-    handle = handle.strip()
-    if not handle:
+    handles = parse_handles(handle)
+    if not handles:
         raise HTTPException(400, "handle is required")
+    canonical_handle = format_handles(handles)
 
     parsed_locations = _parse_locations(locations)
     if not parsed_locations:
@@ -204,7 +207,7 @@ async def update_player(
                 WHERE id = ?
                 """,
                 (
-                    handle,
+                    canonical_handle,
                     display_name.strip() or None,
                     new_streak,
                     new_streak_set_at,
