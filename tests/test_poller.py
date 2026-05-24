@@ -65,7 +65,8 @@ def test_increased_score_inserts_visit(tmp_path):
 
     rows = conn.execute("SELECT visit_date, score_delta FROM visits").fetchall()
     assert len(rows) == 1
-    assert rows[0]["visit_date"] == "2026-04-28"
+    # Detected on 2026-04-28; visit is dated to the day before (refresh lag).
+    assert rows[0]["visit_date"] == "2026-04-27"
     assert rows[0]["score_delta"] == 50
 
 

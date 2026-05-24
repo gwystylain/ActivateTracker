@@ -6,7 +6,7 @@ import json
 import logging
 import random
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
 from curl_cffi.requests import AsyncSession
@@ -122,11 +122,13 @@ def persist_snapshot(
 ) -> bool:
     """Insert snapshot. If totalScore went up vs last snapshot, also insert a visit.
 
-    Returns True iff a visit was inserted.
+    Returns True iff a visit was inserted. The visit is dated to the day *before*
+    detection because playactivate's score refresh lags by ~1 day: a visit on
+    May 14 first appears in the poll on May 15.
     """
     now = now or datetime.now(timezone.utc)
     polled_at = now.isoformat(timespec="seconds")
-    visit_date = now.date().isoformat()
+    visit_date = (now.date() - timedelta(days=1)).isoformat()
 
     with transaction(conn):
         prior = conn.execute(
