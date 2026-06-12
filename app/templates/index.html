@@ -29,9 +29,8 @@
             <tr>
                 <th>Player</th>
                 <th>Days since last visit</th>
-                <th>Current streak</th>
                 <th>Discount</th>
-                <th>Visits this month</th>
+                <th>Visits in last 30 days</th>
                 <th>Visits this year</th>
             </tr>
         </thead>
@@ -48,16 +47,15 @@
                         {{ p.days_since_last_visit }}
                     {% endif %}
                 </td>
-                <td>{{ p.current_streak }}</td>
                 <td>{{ p.discount_pct }}%</td>
-                <td>{{ p.visits_this_month }}</td>
+                <td>{{ p.visits_last_30_days }}</td>
                 <td>{{ p.visits_ytd }}</td>
             </tr>
             {% endfor %}
         </tbody>
     </table>
     </div>
-    <p class="muted small">As of {{ today }} (UTC). Streak resets after 30 days without a visit. Discount caps at 25%.</p>
+    <p class="muted small">As of {{ today }} (UTC). Discount is based on visits in the last 30 days: 1 visit = 10% off, 2 = 15%, 3 = 20%, 4 or more = 25%.</p>
 </section>
 {% endif %}
 {% endblock %}

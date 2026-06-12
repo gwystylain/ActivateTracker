@@ -1,70 +1,72 @@
-"""Pure functions for streak / visit aggregation.
+"""Pure functions for visit aggregation and the trailing-window discount.
 
 A "visit" is one calendar day on which the player's totalScore at *any* of
 their tracked locations increased compared to the previous snapshot for that
 location. Multiple location-increases on the same day count as one visit
 (matches Activate's per-day visit accounting).
 
-Activate streak rules:
-  - Each visit advances the streak by 1.
-  - Discount = min(streak, 5) * 5 percent (capped at 25%).
-  - If 30 days elapse with no visit, the streak resets to 0.
-  - `initial_streak` is an admin-set baseline for visits that happened
-    before tracking started; treat it as if it were established on
-    `initial_streak_set_at`.
+Activate discount rules (based on visits in the trailing 30 days):
+  - 0 visits  -> 0% off
+  - 1 visit   -> 10% off
+  - 2 visits  -> 15% off
+  - 3 visits  -> 20% off
+  - 4+ visits -> 25% off
+  - `initial_streak` is an admin-set baseline for visits that happened before
+    tracking started; it is treated as that many visits on
+    `initial_streak_set_at` and only counts while that date is still inside
+    the 30-day window.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
 
-STREAK_RESET_DAYS = 30
-DISCOUNT_CAP_VISITS = 5
-DISCOUNT_PCT_PER_VISIT = 5
+DISCOUNT_WINDOW_DAYS = 30
+DISCOUNT_MAX_PCT = 25
 
 
 @dataclass(frozen=True)
 class StreakSummary:
-    current_streak: int
     discount_pct: int
     days_since_last_visit: int | None
     last_visit_date: date | None
-    visits_this_month: int
+    visits_last_30_days: int
     visits_ytd: int
     visits_by_year: dict[int, int]
 
 
-def discount_for(streak: int) -> int:
-    return min(max(streak, 0), DISCOUNT_CAP_VISITS) * DISCOUNT_PCT_PER_VISIT
+def discount_for(visits_last_30_days: int) -> int:
+    """Tiered discount: first visit is 10%, then +5% per visit, capped at 25%."""
+    n = max(visits_last_30_days, 0)
+    if n <= 0:
+        return 0
+    return min(5 + 5 * n, DISCOUNT_MAX_PCT)
 
 
-def compute_streak(
+def visits_in_window(
     visit_dates: list[date],
     *,
     initial_streak: int = 0,
     initial_streak_set_at: date | None = None,
     today: date | None = None,
+    window_days: int = DISCOUNT_WINDOW_DAYS,
 ) -> int:
-    """Walk visits in chronological order, applying the 30-day reset rule.
+    """Count unique visit days falling within the trailing `window_days`.
 
-    `visit_dates` may be unsorted and may contain duplicates; both are normalised.
+    The admin baseline is treated as `initial_streak` visits on
+    `initial_streak_set_at` and only contributes while that date is still
+    inside the window.
     """
     today = today or date.today()
-    unique_sorted = sorted(set(visit_dates))
-
-    streak = initial_streak
-    last_event = initial_streak_set_at  # day the current streak count was last "valid"
-
-    for d in unique_sorted:
-        if last_event is not None and (d - last_event).days > STREAK_RESET_DAYS:
-            streak = 0
-        streak += 1
-        last_event = d
-
-    if last_event is not None and (today - last_event).days > STREAK_RESET_DAYS:
-        streak = 0
-
-    return streak
+    cutoff = today - timedelta(days=window_days)
+    count = sum(1 for d in set(visit_dates) if cutoff <= d <= today)
+    if (
+        initial_streak > 0
+        and initial_streak_set_at is not None
+        and cutoff <= initial_streak_set_at <= today
+    ):
+        count += initial_streak
+    return count
 
 
 def summarize(
@@ -79,8 +81,11 @@ def summarize(
     unique_sorted = sorted(set(visit_dates))
     last = unique_sorted[-1] if unique_sorted else initial_streak_set_at
 
-    visits_this_month = sum(
-        1 for d in unique_sorted if d.year == today.year and d.month == today.month
+    visits_last_30_days = visits_in_window(
+        unique_sorted,
+        initial_streak=initial_streak,
+        initial_streak_set_at=initial_streak_set_at,
+        today=today,
     )
     visits_ytd = sum(1 for d in unique_sorted if d.year == today.year)
 
@@ -89,21 +94,13 @@ def summarize(
         y = today.year - offset
         by_year[y] = sum(1 for d in unique_sorted if d.year == y)
 
-    streak = compute_streak(
-        unique_sorted,
-        initial_streak=initial_streak,
-        initial_streak_set_at=initial_streak_set_at,
-        today=today,
-    )
-
     days_since = (today - last).days if last is not None else None
 
     return StreakSummary(
-        current_streak=streak,
-        discount_pct=discount_for(streak),
+        discount_pct=discount_for(visits_last_30_days),
         days_since_last_visit=days_since,
         last_visit_date=last if unique_sorted else None,
-        visits_this_month=visits_this_month,
+        visits_last_30_days=visits_last_30_days,
         visits_ytd=visits_ytd,
         visits_by_year=by_year,
     )

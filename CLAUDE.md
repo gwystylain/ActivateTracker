@@ -10,7 +10,7 @@ Local dev (Windows; use the venv's Python explicitly because system Python lacks
 python -m venv .venv
 .venv/Scripts/python.exe -m pip install -e ".[dev]"
 .venv/Scripts/python.exe -m pytest -q
-.venv/Scripts/python.exe -m pytest -q tests/test_streak.py::test_visit_at_day_30_keeps_streak
+.venv/Scripts/python.exe -m pytest -q tests/test_streak.py::test_discount_tiers
 ACTIVATETRACKER_DB=data/dev.db .venv/Scripts/python.exe -m uvicorn app.main:app --reload
 ```
 
@@ -37,8 +37,9 @@ playactivate.com exposes scores but not visit timestamps. The poller infers visi
 `total_score` of each new snapshot against the most recent prior snapshot for the same
 `(player_id, location_id)`. A strictly-greater value inserts one row in `visits` dated today.
 Multi-location increases on the same calendar day are deduped to one visit by `streak.summarize`,
-which is what Activate's per-day visit counting actually does. `streak.compute_streak` walks
-sorted unique visit dates applying a 30-day reset.
+which is what Activate's per-day visit counting actually does. `streak.visits_in_window` counts
+unique visit days inside the trailing 30 days; `streak.discount_for` maps that count to a discount
+(1 visit = 10%, +5% per extra visit, capped at 25% for 4+).
 
 ### Multi-handle players
 `players.handle` is a comma-separated list of Activate profile slugs (canonicalised to

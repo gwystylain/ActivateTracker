@@ -159,13 +159,12 @@ def _build_player_summaries(conn, *, today: date) -> list[dict[str, Any]]:
                 "id": p["id"],
                 "handle": p["handle"],
                 "display_name": p["display_name"] or p["handle"],
-                "current_streak": summary.current_streak,
                 "discount_pct": summary.discount_pct,
                 "days_since_last_visit": summary.days_since_last_visit,
                 "last_visit_date": summary.last_visit_date.isoformat()
                 if summary.last_visit_date
                 else None,
-                "visits_this_month": summary.visits_this_month,
+                "visits_last_30_days": summary.visits_last_30_days,
                 "visits_ytd": summary.visits_ytd,
                 "visits_by_year": summary.visits_by_year,
             }
