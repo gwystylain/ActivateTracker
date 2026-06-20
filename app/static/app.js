@@ -38,7 +38,13 @@
         let last = null;
         const data = labels.map(d => {
             if (byDate.has(d)) last = byDate.get(d);
-            return last ? { x: d, y: last.total_score, locations: last.locations } : null;
+            // With parsing:false every entry must be an object; a bare null
+            // throws when Chart.js reads .x/.y off it. Use a null-y gap point
+            // for dates before this player's first observation (e.g. a player
+            // added after the graph already has history). spanGaps bridges it.
+            return last
+                ? { x: d, y: last.total_score, locations: last.locations }
+                : { x: d, y: null };
         });
         const pointRadius = labels.map(d => (changeDates.has(d) ? 3 : 0));
         const pointHoverRadius = pointRadius.map(r => (r > 0 ? r + 2 : 0));
