@@ -30,7 +30,7 @@ async def admin_home(request: Request):
     players = conn.execute(
         """
         SELECT p.id, p.handle, p.display_name, p.initial_streak,
-               p.initial_streak_set_at, p.created_at
+               p.initial_streak_set_at, p.hidden, p.created_at
         FROM players p ORDER BY p.handle
         """
     ).fetchall()
@@ -231,6 +231,21 @@ async def update_player(
     except Exception as e:
         raise HTTPException(400, f"Could not update player: {e}") from e
 
+    return RedirectResponse("/admin", status_code=303)
+
+
+@router.post("/admin/players/{player_id}/visibility")
+async def toggle_visibility(player_id: int, request: Request):
+    """Flip a player's hidden flag. Hidden players keep being polled; they're
+    just dropped from the public chart and dashboard."""
+    _require_session(request)
+    conn = request.app.state.db
+    with transaction(conn):
+        cur = conn.execute(
+            "UPDATE players SET hidden = 1 - hidden WHERE id = ?", (player_id,)
+        )
+    if cur.rowcount == 0:
+        raise HTTPException(404, "player not found")
     return RedirectResponse("/admin", status_code=303)
 
 

@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS players (
     display_name          TEXT,
     initial_streak        INTEGER NOT NULL DEFAULT 0,
     initial_streak_set_at TEXT,
+    hidden                INTEGER NOT NULL DEFAULT 0,
     created_at            TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -70,6 +71,18 @@ def connect(path: str | Path) -> sqlite3.Connection:
 
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    _migrate(conn)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Idempotent ALTERs for columns added after a deployment's table already
+    exists. CREATE TABLE IF NOT EXISTS won't add columns to an existing table,
+    so each new column needs a PRAGMA-guarded ALTER here."""
+    player_cols = {r["name"] for r in conn.execute("PRAGMA table_info(players)")}
+    if "hidden" not in player_cols:
+        conn.execute(
+            "ALTER TABLE players ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0"
+        )
 
 
 @contextmanager

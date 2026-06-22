@@ -56,6 +56,7 @@ async def chart_data(request: Request) -> JSONResponse:
                s.total_score      AS total_score
         FROM score_snapshots s
         JOIN players p ON p.id = s.player_id
+        WHERE p.hidden = 0
         ORDER BY p.handle, s.location_id, s.polled_at
         """
     ).fetchall()
@@ -132,7 +133,7 @@ def _build_player_summaries(conn, *, today: date) -> list[dict[str, Any]]:
     players = conn.execute(
         """
         SELECT id, handle, display_name, initial_streak, initial_streak_set_at
-        FROM players ORDER BY handle
+        FROM players WHERE hidden = 0 ORDER BY handle
         """
     ).fetchall()
 

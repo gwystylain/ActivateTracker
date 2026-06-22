@@ -66,6 +66,7 @@ table.data th, table.data td {
 }
 table.data th { color: var(--muted); font-weight: 600; font-size: 0.9em; }
 table.data tr:last-child td { border-bottom: 0; }
+table.data tr.row-hidden td { opacity: 0.5; }
 
 .chart-wrap { position: relative; height: 360px; }
 

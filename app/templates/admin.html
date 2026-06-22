@@ -23,12 +23,13 @@
                 <th>Display name</th>
                 <th>Initial streak</th>
                 <th>Locations (id, slug)</th>
+                <th>Visibility</th>
                 <th></th>
             </tr>
         </thead>
         <tbody>
             {% for p in players %}
-            <tr>
+            <tr{% if p.hidden %} class="row-hidden"{% endif %}>
                 <td><code>{{ p.handle }}</code></td>
                 <td>{{ p.display_name or '' }}</td>
                 <td>{{ p.initial_streak }}{% if p.initial_streak_set_at %} <span class="muted small">(set {{ p.initial_streak_set_at }})</span>{% endif %}</td>
@@ -37,8 +38,19 @@
                         <div><code>{{ loc.location_id }}, {{ loc.slug }}</code></div>
                     {% endfor %}
                 </td>
+                <td>
+                    {% if p.hidden %}
+                        <span class="muted">Hidden</span>
+                    {% else %}
+                        <span class="ok">Shown</span>
+                    {% endif %}
+                </td>
                 <td class="actions">
                     <a class="button-link" href="/admin/players/{{ p.id }}/edit">Edit</a>
+                    <form method="post" action="/admin/players/{{ p.id }}/visibility" class="inline">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button type="submit">{% if p.hidden %}Show{% else %}Hide{% endif %}</button>
+                    </form>
                     <form method="post" action="/admin/players/{{ p.id }}/delete" class="inline" onsubmit="return confirm('Remove {{ p.handle }} and all its data?');">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                         <button type="submit" class="danger">Remove</button>
