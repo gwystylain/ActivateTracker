@@ -71,6 +71,6 @@
 {% block scripts %}
 {% if players %}
 <script src="/static/chart.umd.min.js"></script>
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v={{ static_v('app.js') }}"></script>
 {% endif %}
 {% endblock %}

@@ -1,8 +1,10 @@
 """FastAPI entrypoint. Wires routes, middleware, scheduler."""
 from __future__ import annotations
 
+import hashlib
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -25,6 +27,31 @@ logging.basicConfig(
 )
 
 
+STATIC_DIR = Path("app/static")
+
+
+def _make_static_versioner(static_dir: Path):
+    """Return a Jinja helper that appends a content hash to static URLs.
+
+    Browsers cache /static/app.css and /static/app.js aggressively; without a
+    cache-busting token a client that loaded an older deploy keeps serving the
+    stale asset against fresh HTML. The hash is computed once per file per
+    process (the process restarts on deploy, so the cache is always fresh) and
+    only changes when the file's bytes change."""
+    cache: dict[str, str] = {}
+
+    def static_v(filename: str) -> str:
+        if filename not in cache:
+            try:
+                data = static_dir.joinpath(filename).read_bytes()
+                cache[filename] = hashlib.sha256(data).hexdigest()[:8]
+            except OSError:
+                cache[filename] = "0"
+        return cache[filename]
+
+    return static_v
+
+
 def _build_trigger(schedule: str, hour_utc: int) -> CronTrigger | None:
     if schedule == "manual":
         return None
@@ -42,7 +69,9 @@ async def lifespan(app: FastAPI):
 
     app.state.config = cfg
     app.state.db = conn
-    app.state.templates = Jinja2Templates(directory="app/templates")
+    templates = Jinja2Templates(directory="app/templates")
+    templates.env.globals["static_v"] = _make_static_versioner(STATIC_DIR)
+    app.state.templates = templates
 
     scheduler: AsyncIOScheduler | None = None
     trigger = _build_trigger(cfg.poll.schedule, cfg.poll.hour_utc)
