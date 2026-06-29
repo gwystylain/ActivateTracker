@@ -1,3 +1,26 @@
+// Collapsible per-player breakdown rows on the dashboard summary table.
+(function () {
+    function toggle(row) {
+        const id = row.dataset.player;
+        const expanded = !row.classList.contains('expanded');
+        row.classList.toggle('expanded', expanded);
+        row.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        document
+            .querySelectorAll('tr.loc-row[data-player="' + id + '"]')
+            .forEach(lr => lr.classList.toggle('show', expanded));
+    }
+
+    document.querySelectorAll('table.player-summary tr.player-row').forEach(row => {
+        row.addEventListener('click', () => toggle(row));
+        row.addEventListener('keydown', e => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                toggle(row);
+            }
+        });
+    });
+})();
+
 (async function () {
     const canvas = document.getElementById('scoresChart');
     if (!canvas || typeof Chart === 'undefined') return;

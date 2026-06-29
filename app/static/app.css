@@ -68,6 +68,20 @@ table.data th { color: var(--muted); font-weight: 600; font-size: 0.9em; }
 table.data tr:last-child td { border-bottom: 0; }
 table.data tr.row-hidden td { opacity: 0.5; }
 
+/* Collapsible per-player breakdown on the dashboard. */
+table.player-summary tr.player-row { cursor: pointer; }
+table.player-summary tr.player-row:hover { background: var(--panel-2); }
+table.player-summary tr.player-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+table.player-summary .toggle {
+    display: inline-block; width: 1em; margin-right: 4px; color: var(--muted);
+    transition: transform 0.12s ease;
+}
+table.player-summary tr.player-row.expanded .toggle { transform: rotate(90deg); }
+table.player-summary tr.loc-row { display: none; }
+table.player-summary tr.loc-row.show { display: table-row; }
+table.player-summary tr.loc-row td { background: var(--panel-2); color: var(--muted); }
+table.player-summary tr.loc-row td.loc-name { padding-left: 32px; }
+
 .chart-wrap { position: relative; height: 360px; }
 
 .actions { white-space: nowrap; }

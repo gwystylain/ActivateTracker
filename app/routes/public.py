@@ -129,6 +129,11 @@ async def chart_data(request: Request) -> JSONResponse:
 
 # ---------- helpers ----------
 
+def _location_label(slug: str) -> str:
+    """Human-readable location name from its slug (e.g. 'langley' -> 'Langley')."""
+    return slug.replace("-", " ").replace("_", " ").title()
+
+
 def _build_player_summaries(conn, *, today: date) -> list[dict[str, Any]]:
     players = conn.execute(
         """
@@ -140,27 +145,71 @@ def _build_player_summaries(conn, *, today: date) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for p in players:
         visit_rows = conn.execute(
-            "SELECT visit_date FROM visits WHERE player_id = ? ORDER BY visit_date",
+            "SELECT visit_date, location_id FROM visits WHERE player_id = ? ORDER BY visit_date",
             (p["id"],),
         ).fetchall()
         dates = [date.fromisoformat(r["visit_date"]) for r in visit_rows]
+
+        # Group visit days by location id so each location's stamp card can be
+        # summarised independently. A location whose player_locations row was
+        # removed still surfaces under "loc-<id>".
+        loc_name = {
+            r["location_id"]: _location_label(r["slug"])
+            for r in conn.execute(
+                "SELECT location_id, slug FROM player_locations WHERE player_id = ?",
+                (p["id"],),
+            ).fetchall()
+        }
+        visit_dates_by_loc: dict[int, list[date]] = defaultdict(list)
+        for r in visit_rows:
+            visit_dates_by_loc[r["location_id"]].append(
+                date.fromisoformat(r["visit_date"])
+            )
+
         baseline = (
             date.fromisoformat(p["initial_streak_set_at"])
             if p["initial_streak_set_at"]
             else None
         )
-        summary = streak_mod.summarize(
-            dates,
+        summary_kwargs = dict(
             initial_streak=p["initial_streak"] or 0,
             initial_streak_set_at=baseline,
             today=today,
         )
+        summary = streak_mod.summarize(dates, **summary_kwargs)
+
+        # Per-location breakdown using the same columns: every tracked location,
+        # plus any historical-only ones still present in visits. The admin
+        # baseline is player-level (no location attached) so it's applied to
+        # each location's window — same rule as the aggregate above.
+        loc_ids = list(loc_name) + [
+            lid for lid in visit_dates_by_loc if lid not in loc_name
+        ]
+        locations: list[dict[str, Any]] = []
+        for lid in loc_ids:
+            ls = streak_mod.summarize(visit_dates_by_loc.get(lid, []), **summary_kwargs)
+            locations.append(
+                {
+                    "name": loc_name.get(lid, f"loc-{lid}"),
+                    "discount_pct": ls.discount_pct,
+                    "days_since_last_visit": ls.days_since_last_visit,
+                    "last_visit_date": ls.last_visit_date.isoformat()
+                    if ls.last_visit_date
+                    else None,
+                    "visits_last_30_days": ls.visits_last_30_days,
+                    "visits_ytd": ls.visits_ytd,
+                }
+            )
+        # Highest discount first, then alphabetical; headline discount is the best.
+        locations.sort(key=lambda l: (-l["discount_pct"], l["name"]))
+        discount_pct = max((l["discount_pct"] for l in locations), default=0)
         out.append(
             {
                 "id": p["id"],
                 "handle": p["handle"],
                 "display_name": p["display_name"] or p["handle"],
-                "discount_pct": summary.discount_pct,
+                "discount_pct": discount_pct,
+                "locations": locations,
                 "days_since_last_visit": summary.days_since_last_visit,
                 "last_visit_date": summary.last_visit_date.isoformat()
                 if summary.last_visit_date

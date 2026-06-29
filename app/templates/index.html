@@ -24,7 +24,7 @@
 <section class="card">
     <h2>Player summary</h2>
     <div class="table-wrap">
-    <table class="data">
+    <table class="data player-summary">
         <thead>
             <tr>
                 <th>Player</th>
@@ -36,26 +36,34 @@
         </thead>
         <tbody>
             {% for p in players %}
-            <tr>
+            <tr class="player-row" data-player="{{ p.id }}" role="button" tabindex="0" aria-expanded="false">
                 <td>
+                    <span class="toggle" aria-hidden="true">&#9656;</span>
                     {{ p.display_name }}{% if p.handle != p.display_name %} <span class="muted small">({{ p.handle }})</span>{% endif %}
                 </td>
                 <td>
-                    {% if p.days_since_last_visit is none %}
-                        &mdash;
-                    {% else %}
-                        {{ p.days_since_last_visit }}
-                    {% endif %}
+                    {% if p.days_since_last_visit is none %}&mdash;{% else %}{{ p.days_since_last_visit }}{% endif %}
                 </td>
                 <td>{{ p.discount_pct }}%</td>
                 <td>{{ p.visits_last_30_days }}</td>
                 <td>{{ p.visits_ytd }}</td>
             </tr>
+            {% for loc in p.locations %}
+            <tr class="loc-row" data-player="{{ p.id }}">
+                <td class="loc-name">{{ loc.name }}</td>
+                <td>
+                    {% if loc.days_since_last_visit is none %}&mdash;{% else %}{{ loc.days_since_last_visit }}{% endif %}
+                </td>
+                <td>{{ loc.discount_pct }}%</td>
+                <td>{{ loc.visits_last_30_days }}</td>
+                <td>{{ loc.visits_ytd }}</td>
+            </tr>
+            {% endfor %}
             {% endfor %}
         </tbody>
     </table>
     </div>
-    <p class="muted small">As of {{ today }} (UTC). Discount is based on visits in the last 30 days: 1 visit = 10% off, 2 = 15%, 3 = 20%, 4 or more = 25%.</p>
+    <p class="muted small">As of {{ today }} (UTC). Click a player to see a per-location breakdown. Discount stamp cards are per location, based on visits to that location in the last 30 days: 1 visit = 10% off, 2 = 15%, 3 = 20%, 4 or more = 25%. A player's headline discount is their best location.</p>
 </section>
 {% endif %}
 {% endblock %}
