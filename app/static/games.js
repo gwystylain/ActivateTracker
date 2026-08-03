@@ -19,6 +19,12 @@
     const farmerCard = document.getElementById('farmerCard');
     const farmerBody = document.getElementById('farmerBody');
     const farmerNote = document.getElementById('farmerNote');
+    const unscoredCard = document.getElementById('unscoredCard');
+    const unscoredBody = document.getElementById('unscoredBody');
+    const unscoredNote = document.getElementById('unscoredNote');
+    const recordsCard = document.getElementById('recordsCard');
+    const recordsBody = document.getElementById('recordsBody');
+    const recordsNote = document.getElementById('recordsNote');
 
     const fmt = new Intl.NumberFormat();
     const KEY = 'atrk.games';
@@ -129,6 +135,30 @@
         return medianByLevel.get(String(levelId)) || 0;
     }
 
+    // Levels nobody at this location has ever scored. Top scores are sparse —
+    // a missing key means no score — and a stored zero says the same thing, so
+    // both count. Nothing to do with the player filter: this is the whole
+    // venue's board, tracked players included only by being part of it.
+    function unscoredIn(game) {
+        return game.levels.filter(lvl => !topScoreOf(game.game_id, lvl));
+    }
+
+    // Does this player's best *hold* the location's top score? Equal counts —
+    // the top score is only ever somebody's own number, so matching it means
+    // holding it (shared with whoever else tied). Greater than counts too: the
+    // room pages that supply top scores are re-read on a throttle, so a player
+    // who has just beaten the board reads high until the next walk.
+    function holdsTop(playerId, gameId, levelId) {
+        const top = topScoreOf(gameId, levelId);
+        if (!top) return false;   // nobody has scored it — no record to hold
+        const mine = scoreOf(playerId, gameId, levelId);
+        return mine !== null && mine >= top;
+    }
+
+    function recordsIn(playerId, game) {
+        return game.levels.filter(lvl => holdsTop(playerId, game.game_id, lvl));
+    }
+
     function beatenCount(playerId, game) {
         let n = 0;
         for (const lvl of game.levels) if (scoreOf(playerId, game.game_id, lvl) !== null) n++;
@@ -207,6 +237,8 @@
     function render() {
         const players = activePlayers();
         renderFarmer(players);
+        renderUnscored();
+        renderRecords(players);
         renderLevels(players);
         renderStatus(players);
     }
@@ -270,6 +302,124 @@
             'scored yet — a rough ceiling, not a prediction. Reflects the filters above.';
     }
 
+    function renderUnscored() {
+        const inView = visibleGames();
+        if (!inView.length) {
+            unscoredCard.hidden = true;
+            return;
+        }
+        unscoredCard.hidden = false;
+
+        // Emptiest gamemodes first; sort is stable, so equal counts keep the
+        // site's own room/gamemode order.
+        const rows = inView
+            .map(({ room, game }) => ({ room, game, levels: unscoredIn(game) }))
+            .filter(r => r.levels.length)
+            .sort((a, b) => b.levels.length - a.levels.length);
+
+        unscoredBody.replaceChildren();
+        for (const r of rows) {
+            const total = r.game.levels.length;
+            unscoredBody.appendChild(
+                el('tr', null, [
+                    el('td', { text: r.room.name }),
+                    el('td', { text: r.game.name }),
+                    el('td', {
+                        className: 'count' + (r.levels.length === total ? ' full' : ''),
+                    }, [
+                        el('strong', { text: String(r.levels.length) }),
+                        el('span', { className: 'muted small', text: ' of ' + total }),
+                    ]),
+                    el('td', null, levelChips(r.levels, 'level-chip')),
+                ])
+            );
+        }
+
+        if (!rows.length) {
+            unscoredNote.textContent =
+                'Every level in view has a top score — nothing here is untouched.';
+            return;
+        }
+        const levels = rows.reduce((sum, r) => sum + r.levels.length, 0);
+        unscoredNote.textContent =
+            levels + ' level' + (levels === 1 ? '' : 's') + ' across ' + rows.length +
+            ' gamemode' + (rows.length === 1 ? '' : 's') + ', by the site’s level numbering. ' +
+            'Follows the game and gamemode filters; the player filter does not apply. ' +
+            'A location’s top scores are only re-read when one of the tracked players ' +
+            'scores there, so a very recent first score may not have landed yet.';
+    }
+
+    // Level numbers as chips, in the site's 1-based numbering. Real text nodes
+    // between them, not just margin, so the numbers stay separate when the cell
+    // is read aloud or copied.
+    function levelChips(levels, className) {
+        return levels.flatMap((lvl, i) => [
+            i ? document.createTextNode(' ') : null,
+            el('span', { className: className, text: String(lvl + 1) }),
+        ]);
+    }
+
+    function renderRecords(players) {
+        const inView = visibleGames();
+        if (!players.length || !inView.length) {
+            recordsCard.hidden = true;
+            return;
+        }
+        recordsCard.hidden = false;
+
+        recordsBody.replaceChildren();
+        // Grouped by player rather than ranked across them: the question this
+        // answers is "what do I hold", one player at a time.
+        const totals = [];
+        for (const p of players) {
+            const rows = inView
+                .map(({ room, game }) => ({ room, game, levels: recordsIn(p.id, game) }))
+                .filter(r => r.levels.length)
+                .sort((a, b) => b.levels.length - a.levels.length);
+            const held = rows.reduce((sum, r) => sum + r.levels.length, 0);
+            totals.push({ name: p.display_name, held });
+            if (!rows.length) continue;
+
+            recordsBody.appendChild(
+                el('tr', { className: 'group-row' }, [
+                    el('th', {
+                        text: p.display_name + ' — ' + held + (held === 1 ? ' record' : ' records'),
+                        attrs: { colspan: '4', scope: 'colgroup' },
+                    }),
+                ])
+            );
+            for (const r of rows) {
+                recordsBody.appendChild(
+                    el('tr', null, [
+                        el('td', { text: r.room.name }),
+                        el('td', { text: r.game.name }),
+                        el('td', { className: 'count' }, [
+                            el('strong', { text: String(r.levels.length) }),
+                            el('span', {
+                                className: 'muted small',
+                                text: ' of ' + r.game.levels.length,
+                            }),
+                        ]),
+                        el('td', null, levelChips(r.levels, 'level-chip record')),
+                    ])
+                );
+            }
+        }
+
+        if (!totals.some(t => t.held)) {
+            recordsNote.textContent =
+                'None of the selected players hold a top score in view. Levels nobody ' +
+                'has scored at all are in Never scored above — those are the cheapest ' +
+                'records to take.';
+            return;
+        }
+        recordsNote.textContent =
+            totals.map(t => t.name + ' ' + t.held).join(' · ') +
+            '. A record means the player’s best equals this location’s top score — an ' +
+            'exact tie counts, and so does a score that beat the board since the last ' +
+            'room walk. Follows the game and gamemode filters.';
+    }
+
     function renderLevels(players) {
         const rows = visibleGames();
         levelsCard.hidden = !rows.length;
@@ -328,7 +478,19 @@
                 const n = beatenCount(p.id, game);
                 const total = game.levels.length;
                 const cls = n === 0 ? 'none' : (n === total ? 'all' : 'some');
-                return el('td', { className: 'beat ' + cls, text: n + '/' + total });
+                const held = recordsIn(p.id, game).length;
+                // The crown count says the row is worth expanding — the levels
+                // themselves are marked inside it.
+                return el('td', { className: 'beat ' + cls }, [
+                    el('span', { text: n + '/' + total }),
+                    held
+                        ? el('span', {
+                            className: 'rec-badge',
+                            text: '👑' + held,
+                            attrs: { title: held + ' top score' + (held === 1 ? '' : 's') + ' held here' },
+                        })
+                        : null,
+                ]);
             }),
         ]);
 
@@ -355,9 +517,20 @@
             el('td', { className: 'muted small', text: top === null ? '—' : fmt.format(top) }),
             ...players.map(p => {
                 const score = scoreOf(p.id, game.game_id, levelId);
-                return score === null
-                    ? el('td', { className: 'no-score', text: 'No score' })
-                    : el('td', { text: fmt.format(score) });
+                if (score === null) return el('td', { className: 'no-score', text: 'No score' });
+                if (!holdsTop(p.id, game.game_id, levelId)) {
+                    return el('td', { text: fmt.format(score) });
+                }
+                // Colour alone can't carry this, so the crown and the
+                // screen-reader text say it too.
+                return el('td', {
+                    className: 'top-score',
+                    attrs: { title: 'Location top score' },
+                }, [
+                    el('span', { className: 'crown', text: '👑', attrs: { 'aria-hidden': 'true' } }),
+                    el('span', { className: 'val', text: fmt.format(score) }),
+                    el('span', { className: 'sr-only', text: ' — location top score' }),
+                ]);
             }),
         ]);
     }
@@ -376,6 +549,8 @@
             statusEl.textContent = 'Failed to load game data.';
             levelsCard.hidden = true;
             farmerCard.hidden = true;
+            unscoredCard.hidden = true;
+            recordsCard.hidden = true;
             return;
         }
 

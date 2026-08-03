@@ -47,7 +47,7 @@
 </section>
 
 <section class="card" id="farmerCard" hidden>
-    <details id="farmerPanel" open>
+    <details id="farmerPanel" class="card-panel" open>
         <summary><h2>Point farmer</h2></summary>
         <p class="muted small">
             Activate banks only your best-ever run per level, so a level nobody in the
@@ -70,6 +70,56 @@
             </table>
         </div>
         <p class="muted small" id="farmerNote"></p>
+    </details>
+</section>
+
+<section class="card" id="unscoredCard" hidden>
+    <details id="unscoredPanel" class="card-panel" open>
+        <summary><h2>Never scored</h2></summary>
+        <p class="muted small">
+            Levels with no top score at this location — nobody who plays here, tracked
+            or not, has ever put a number on the board. A first run takes the location
+            record outright.
+        </p>
+        <div class="table-wrap">
+            <table class="data unscored">
+                <thead>
+                    <tr>
+                        <th>Game</th>
+                        <th>Gamemode</th>
+                        <th>Never scored</th>
+                        <th>Levels</th>
+                    </tr>
+                </thead>
+                <tbody id="unscoredBody"></tbody>
+            </table>
+        </div>
+        <p class="muted small" id="unscoredNote"></p>
+    </details>
+</section>
+
+<section class="card" id="recordsCard" hidden>
+    <details id="recordsPanel" class="card-panel" open>
+        <summary><h2>Records held</h2></summary>
+        <p class="muted small">
+            Levels where a selected player's best <em>is</em> this location's top score —
+            nobody who plays here has beaten it. Same levels the breakdown below marks
+            with a crown.
+        </p>
+        <div class="table-wrap">
+            <table class="data records">
+                <thead>
+                    <tr>
+                        <th>Game</th>
+                        <th>Gamemode</th>
+                        <th>Records</th>
+                        <th>Levels</th>
+                    </tr>
+                </thead>
+                <tbody id="recordsBody"></tbody>
+            </table>
+        </div>
+        <p class="muted small" id="recordsNote"></p>
     </details>
 </section>
 

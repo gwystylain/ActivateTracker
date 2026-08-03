@@ -175,3 +175,19 @@ that level. The `/games` table shows that as a dash. Point Farmer can't, since a
 touched would then rank *below* one people have already played, which is backwards; `games.js`
 substitutes the median top score for the same level index across the location (scores track the
 level number closely, level 1 ≈ 2k up to level 10 ≈ 10k).
+
+The **Never scored** card lists those gaps directly, one row per gamemode with the missing level
+numbers. A stored `top_score` of 0 counts as never scored alongside a missing row — the site can
+emit either. It reads only `top_scores`, so the player checkboxes don't apply (it's the venue's
+board, not ours); the game/gamemode selects do. The throttle above is why its note warns that a
+first score set since the last room walk may not show yet.
+
+**Records held** is the same comparison inverted: `games.js:holdsTop` calls a level held when the
+player's high score is `>=` the location's `top_score` for it. Equality is the ordinary case — the
+top score *is* somebody's own number — and every player who matches it is shown, so ties list
+twice. Greater-than is the throttle again: a player who beat the board reads high until the next
+room walk. The level breakdown marks those same cells gold with a crown; the crown count on the
+collapsed gamemode row says which rows are worth expanding. The shimmer on the number is
+transparent text over a clipped gradient, so it sits behind both `prefers-reduced-motion:
+no-preference` and an `@supports (background-clip: text)` guard — without the guard a browser
+lacking the property would render invisible numbers rather than unstyled ones.
