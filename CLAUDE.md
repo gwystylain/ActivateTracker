@@ -182,12 +182,25 @@ emit either. It reads only `top_scores`, so the player checkboxes don't apply (i
 board, not ours); the game/gamemode selects do. The throttle above is why its note warns that a
 first score set since the last room walk may not show yet.
 
-**Records held** is the same comparison inverted: `games.js:holdsTop` calls a level held when the
-player's high score is `>=` the location's `top_score` for it. Equality is the ordinary case — the
-top score *is* somebody's own number — and every player who matches it is shown, so ties list
-twice. Greater-than is the throttle again: a player who beat the board reads high until the next
-room walk. The level breakdown marks those same cells gold with a crown; the crown count on the
-collapsed gamemode row says which rows are worth expanding. The shimmer on the number is
-transparent text over a clipped gradient, so it sits behind both `prefers-reduced-motion:
-no-preference` and an `@supports (background-clip: text)` guard — without the guard a browser
-lacking the property would render invisible numbers rather than unstyled ones.
+### Records held: the same comparison, computed in two places
+A level is *held* when a player's high score is `>=` the location's `top_score` for it. Equality is
+the ordinary case — the top score *is* somebody's own number — and every player who matches it
+counts, so a tie lists twice. Greater-than is the catalog throttle again: a player who beat the
+board reads high until the next room walk.
+
+That rule is implemented twice and both must move together. `public._build_records` is the
+authority for the **dashboard's Records held card**: server-rendered like the rest of `/`, it
+walks *every* tracked location (skipping ones with no catalog, where there are no top scores to
+hold) and emits per-player rows carrying the location name — which is why that card has a Location
+column and the `/games` cards don't. `games.js:holdsTop` is the same predicate client-side, and
+only feeds the crowned cells in the level breakdown plus the crown count on each collapsed
+gamemode row.
+
+The shimmer on a crowned number is transparent text over a clipped gradient, so it sits behind
+both `prefers-reduced-motion: no-preference` and an `@supports (background-clip: text)` guard —
+without the guard a browser lacking the property would render invisible numbers rather than
+unstyled ones.
+
+`public._beaten_levels` (raw_scores_json → `{(game_id, level_id): high}`, dropping zeros) and
+`public._latest_snapshots` (newest snapshot per visible player at a location) are shared by
+`_build_records` and `/api/game-data`; the zero-is-no-score rule lives in the former only.

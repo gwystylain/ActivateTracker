@@ -37,6 +37,7 @@ async def index(request: Request):
         {
             "request": request,
             "players": summaries,
+            "records": _build_records(conn),
             "today": today.isoformat(),
             "logged_in": session is not None,
             "csrf_token": csrf_token_for(session),
@@ -187,47 +188,14 @@ async def game_data(request: Request, location_id: int | None = None) -> JSONRes
     top_scores = catalog_mod.top_scores_for_location(conn, location_id)
     status = catalog_mod.status_for_location(conn, location_id)
 
-    # Current per-level scores only — the newest snapshot per player at this
-    # location. Older snapshots are history the /games page has no use for.
-    snapshot_rows = conn.execute(
-        """
-        SELECT s.player_id       AS player_id,
-               s.polled_at       AS polled_at,
-               s.raw_scores_json AS raw_scores_json,
-               p.handle          AS handle,
-               p.display_name    AS display_name
-        FROM score_snapshots s
-        JOIN players p ON p.id = s.player_id
-        WHERE s.location_id = ?
-          AND p.hidden = 0
-          AND s.id = (
-              SELECT s2.id FROM score_snapshots s2
-              WHERE s2.player_id = s.player_id AND s2.location_id = s.location_id
-              ORDER BY s2.polled_at DESC, s2.id DESC
-              LIMIT 1
-          )
-        ORDER BY p.handle
-        """,
-        (location_id,),
-    ).fetchall()
+    snapshot_rows = _latest_snapshots(conn, location_id)
 
     players: list[dict[str, Any]] = []
     scores: dict[str, dict[str, dict[str, int]]] = {}
     for r in snapshot_rows:
         beaten: dict[str, dict[str, int]] = {}
-        try:
-            raw = json.loads(r["raw_scores_json"]) or []
-        except (json.JSONDecodeError, TypeError):
-            raw = []
-        for entry in raw:
-            if not isinstance(entry, dict):
-                continue
-            high = int(entry.get("highScore") or 0)
-            if high <= 0:
-                continue  # a zero entry is "no score", same rule as levels_beat
-            beaten.setdefault(str(entry.get("gameId")), {})[
-                str(entry.get("levelId"))
-            ] = high
+        for (game_id, level_id), high in _beaten_levels(r["raw_scores_json"]).items():
+            beaten.setdefault(str(game_id), {})[str(level_id)] = high
         pid = str(r["player_id"])
         scores[pid] = beaten
         players.append(
@@ -257,6 +225,127 @@ async def game_data(request: Request, location_id: int | None = None) -> JSONRes
 
 
 # ---------- helpers ----------
+
+def _latest_snapshots(conn, location_id: int) -> list[Any]:
+    """Newest snapshot per visible player at one location.
+
+    Current per-level scores only — Activate banks the best-ever run, so older
+    snapshots carry nothing the level views need.
+    """
+    return conn.execute(
+        """
+        SELECT s.player_id       AS player_id,
+               s.polled_at       AS polled_at,
+               s.raw_scores_json AS raw_scores_json,
+               p.handle          AS handle,
+               p.display_name    AS display_name
+        FROM score_snapshots s
+        JOIN players p ON p.id = s.player_id
+        WHERE s.location_id = ?
+          AND p.hidden = 0
+          AND s.id = (
+              SELECT s2.id FROM score_snapshots s2
+              WHERE s2.player_id = s.player_id AND s2.location_id = s.location_id
+              ORDER BY s2.polled_at DESC, s2.id DESC
+              LIMIT 1
+          )
+        ORDER BY p.handle
+        """,
+        (location_id,),
+    ).fetchall()
+
+
+def _beaten_levels(raw_scores_json: str | None) -> dict[tuple[int, int], int]:
+    """{(game_id, level_id): high_score} from a snapshot's raw_scores_json.
+
+    A zero high score is "no score", the same rule levels_beat applies.
+    """
+    try:
+        raw = json.loads(raw_scores_json) or []
+    except (json.JSONDecodeError, TypeError):
+        raw = []
+
+    out: dict[tuple[int, int], int] = {}
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        high = int(entry.get("highScore") or 0)
+        if high <= 0:
+            continue
+        try:
+            key = (int(entry["gameId"]), int(entry["levelId"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        out[key] = high
+    return out
+
+
+def _build_records(conn) -> list[dict[str, Any]]:
+    """Per player, the levels where their best *is* a location's top score.
+
+    Held means score >= top. Equality is the ordinary case — a location's top
+    score is only ever somebody's own number, so matching it means holding it,
+    shared with whoever else tied. Greater-than is the catalog throttle: room
+    pages are only re-walked when a tracked player's score at that location
+    moved, so a player who has just beaten the board reads high until then.
+
+    Walks every tracked location, since the dashboard isn't location-scoped.
+    Locations with no catalog yet contribute nothing — with no top scores there
+    is nothing to hold.
+    """
+    by_player: dict[int, dict[str, Any]] = {}
+
+    for loc in _tracked_locations(conn):
+        top_scores = catalog_mod.top_scores_for_location(conn, loc["location_id"])
+        if not top_scores:
+            continue
+        games = {
+            g["game_id"]: (room["name"], g["name"], len(g["levels"]))
+            for room in catalog_mod.rooms_for_location(conn, loc["location_id"])
+            for g in room["games"]
+        }
+
+        for r in _latest_snapshots(conn, loc["location_id"]):
+            held: dict[int, list[int]] = defaultdict(list)
+            for (game_id, level_id), high in _beaten_levels(r["raw_scores_json"]).items():
+                top = top_scores.get(game_id, {}).get(level_id)
+                if not top or high < top or game_id not in games:
+                    continue
+                held[game_id].append(level_id)
+            if not held:
+                continue
+
+            player = by_player.setdefault(
+                r["player_id"],
+                {
+                    "id": r["player_id"],
+                    "handle": r["handle"],
+                    "display_name": r["display_name"] or r["handle"],
+                    "total": 0,
+                    "rows": [],
+                },
+            )
+            for game_id, levels in held.items():
+                room_name, game_name, level_count = games[game_id]
+                player["total"] += len(levels)
+                player["rows"].append(
+                    {
+                        "location": loc["name"],
+                        "room": room_name,
+                        "game": game_name,
+                        "held": len(levels),
+                        "level_count": level_count,
+                        # Level ids are 0-based in the data; the site numbers from 1.
+                        "levels": [lvl + 1 for lvl in sorted(levels)],
+                    }
+                )
+
+    out = sorted(by_player.values(), key=lambda p: p["handle"])
+    for player in out:
+        # Grouped by location, biggest holdings first within each.
+        player["rows"].sort(key=lambda r: (r["location"], -r["held"], r["room"], r["game"]))
+    return out
+
 
 def _tracked_locations(conn) -> list[dict[str, Any]]:
     """Distinct locations any visible player is tracked at, label included."""

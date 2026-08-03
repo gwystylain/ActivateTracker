@@ -3,7 +3,12 @@ from datetime import date
 from types import SimpleNamespace
 
 from app import db as db_mod
-from app.routes.public import _build_player_summaries, chart_data, game_data
+from app.routes.public import (
+    _build_player_summaries,
+    _build_records,
+    chart_data,
+    game_data,
+)
 
 TODAY = date(2026, 8, 3)
 
@@ -278,6 +283,108 @@ async def test_game_data_with_no_players_at_all(tmp_path):
     assert payload["location_id"] is None
     assert payload["rooms"] == []
     assert payload["players"] == []
+
+
+# ---------- dashboard: records held ----------
+# _seed_catalog's top scores are 1003/0 = 2062 and 1003/1 = 3046, and nothing
+# for 1001 or 2802 — the sparse shape a real location has.
+
+def test_records_are_the_levels_where_the_player_matches_the_top_score(tmp_path):
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _seed_catalog(conn)
+    _snap_scores(conn, pid, 72, "2026-08-01T00:00:00", [
+        {"gameId": 1003, "levelId": 0, "highScore": 2062},   # equals the top: held
+        {"gameId": 1003, "levelId": 1, "highScore": 3000},   # under it: not held
+        {"gameId": 1001, "levelId": 0, "highScore": 9999},   # nobody has scored it: not held
+    ])
+
+    (player,) = _build_records(conn)
+
+    assert player["id"] == pid
+    assert player["total"] == 1
+    assert player["rows"] == [
+        {
+            "location": "Langley",
+            "room": "Hoops",
+            "game": "Barrage",
+            "held": 1,
+            "level_count": 3,
+            "levels": [1],   # level ids are 0-based; the site numbers from 1
+        }
+    ]
+
+
+def test_records_count_for_both_players_on_a_tie(tmp_path):
+    conn = _conn(tmp_path)
+    ed = _seed_player(conn)
+    sam = _seed_player(conn, handle="hoopsfan")
+    _seed_catalog(conn)
+    for pid in (ed, sam):
+        _snap_scores(conn, pid, 72, "2026-08-01T00:00:00",
+                     [{"gameId": 1003, "levelId": 0, "highScore": 2062}])
+
+    records = _build_records(conn)
+    assert [p["handle"] for p in records] == ["gmebagholder", "hoopsfan"]
+    assert [p["total"] for p in records] == [1, 1]
+
+
+def test_records_include_a_score_above_a_stale_top(tmp_path):
+    """Room pages are re-walked on a throttle, so a player who just beat the
+    board reads higher than the recorded top until the next catalog refresh."""
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _seed_catalog(conn)
+    _snap_scores(conn, pid, 72, "2026-08-01T00:00:00",
+                 [{"gameId": 1003, "levelId": 1, "highScore": 5000}])   # top is 3046
+
+    (player,) = _build_records(conn)
+    assert player["rows"][0]["levels"] == [2]
+
+
+def test_records_span_locations_and_use_the_newest_snapshot(tmp_path):
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _seed_catalog(conn, location_id=72)
+    _seed_catalog(conn, location_id=38)
+    _snap_scores(conn, pid, 72, "2026-08-01T00:00:00",
+                 [{"gameId": 1003, "levelId": 0, "highScore": 2062}])
+    # Coquitlam: an older snapshot held a record, the current one doesn't.
+    _snap_scores(conn, pid, 38, "2026-07-01T00:00:00",
+                 [{"gameId": 1003, "levelId": 1, "highScore": 3046}])
+    _snap_scores(conn, pid, 38, "2026-08-01T00:00:00",
+                 [{"gameId": 1003, "levelId": 1, "highScore": 3046},
+                  {"gameId": 1003, "levelId": 0, "highScore": 2062}])
+
+    (player,) = _build_records(conn)
+    assert [(r["location"], r["levels"]) for r in player["rows"]] == [
+        ("Coquitlam", [1, 2]),
+        ("Langley", [1]),
+    ]
+    assert player["total"] == 3
+
+
+def test_records_omit_players_and_locations_with_nothing_held(tmp_path):
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _seed_catalog(conn, location_id=72)          # coquitlam is never catalogued
+    _snap_scores(conn, pid, 72, "2026-08-01T00:00:00",
+                 [{"gameId": 1003, "levelId": 0, "highScore": 500}])
+    _snap_scores(conn, pid, 38, "2026-08-01T00:00:00",
+                 [{"gameId": 1003, "levelId": 0, "highScore": 99999}])
+
+    assert _build_records(conn) == []
+
+
+def test_records_exclude_hidden_players(tmp_path):
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _seed_catalog(conn)
+    _snap_scores(conn, pid, 72, "2026-08-01T00:00:00",
+                 [{"gameId": 1003, "levelId": 0, "highScore": 2062}])
+    conn.execute("UPDATE players SET hidden = 1 WHERE id = ?", (pid,))
+
+    assert _build_records(conn) == []
 
 
 def test_summary_ignores_locations_with_null_columns(tmp_path):

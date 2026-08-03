@@ -89,6 +89,55 @@
     <p class="muted small">As of {{ today }} (UTC). Click a player to see a per-location breakdown. Discount stamp cards are per location, based on visits to that location in the last 30 days: 1 visit = 10% off, 2 = 15%, 3 = 20%, 4 or more = 25%. A player's headline discount is their best location, their headline rank is their best (lowest) location rank, and headline levels beat is their highest location.</p>
 </section>
 {% endif %}
+
+{% if records %}
+<section class="card">
+    <details class="card-panel" open>
+        <summary><h2>Records held</h2></summary>
+        <p class="muted small">
+            Levels where a player's best <em>is</em> the top score at that location &mdash;
+            nobody who plays there has beaten it.
+        </p>
+        <div class="table-wrap">
+            <table class="data records">
+                <thead>
+                    <tr>
+                        <th>Location</th>
+                        <th>Game</th>
+                        <th>Gamemode</th>
+                        <th>Records</th>
+                        <th>Levels</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for p in records %}
+                    <tr class="group-row">
+                        <th colspan="5" scope="colgroup">
+                            {{ p.display_name }} &mdash; {{ p.total }} record{{ '' if p.total == 1 else 's' }}
+                        </th>
+                    </tr>
+                    {% for row in p.rows %}
+                    <tr>
+                        <td>{{ row.location }}</td>
+                        <td>{{ row.room }}</td>
+                        <td>{{ row.game }}</td>
+                        <td class="count"><strong>{{ row.held }}</strong> <span class="muted small">of {{ row.level_count }}</span></td>
+                        <td>{% for lvl in row.levels %}<span class="level-chip record">{{ lvl }}</span> {% endfor %}</td>
+                    </tr>
+                    {% endfor %}
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <p class="muted small">
+            Level numbers are the site's own. A record means the player's best equals that
+            location's top score &mdash; an exact tie counts, and so does a score that beat the
+            board since the last room walk. The <a href="/games">Games</a> page marks the same
+            levels with a crown in its per-level breakdown.
+        </p>
+    </details>
+</section>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}

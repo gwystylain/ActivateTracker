@@ -22,9 +22,6 @@
     const unscoredCard = document.getElementById('unscoredCard');
     const unscoredBody = document.getElementById('unscoredBody');
     const unscoredNote = document.getElementById('unscoredNote');
-    const recordsCard = document.getElementById('recordsCard');
-    const recordsBody = document.getElementById('recordsBody');
-    const recordsNote = document.getElementById('recordsNote');
 
     const fmt = new Intl.NumberFormat();
     const KEY = 'atrk.games';
@@ -238,7 +235,6 @@
         const players = activePlayers();
         renderFarmer(players);
         renderUnscored();
-        renderRecords(players);
         renderLevels(players);
         renderStatus(players);
     }
@@ -357,67 +353,6 @@
             i ? document.createTextNode(' ') : null,
             el('span', { className: className, text: String(lvl + 1) }),
         ]);
-    }
-
-    function renderRecords(players) {
-        const inView = visibleGames();
-        if (!players.length || !inView.length) {
-            recordsCard.hidden = true;
-            return;
-        }
-        recordsCard.hidden = false;
-
-        recordsBody.replaceChildren();
-        // Grouped by player rather than ranked across them: the question this
-        // answers is "what do I hold", one player at a time.
-        const totals = [];
-        for (const p of players) {
-            const rows = inView
-                .map(({ room, game }) => ({ room, game, levels: recordsIn(p.id, game) }))
-                .filter(r => r.levels.length)
-                .sort((a, b) => b.levels.length - a.levels.length);
-            const held = rows.reduce((sum, r) => sum + r.levels.length, 0);
-            totals.push({ name: p.display_name, held });
-            if (!rows.length) continue;
-
-            recordsBody.appendChild(
-                el('tr', { className: 'group-row' }, [
-                    el('th', {
-                        text: p.display_name + ' — ' + held + (held === 1 ? ' record' : ' records'),
-                        attrs: { colspan: '4', scope: 'colgroup' },
-                    }),
-                ])
-            );
-            for (const r of rows) {
-                recordsBody.appendChild(
-                    el('tr', null, [
-                        el('td', { text: r.room.name }),
-                        el('td', { text: r.game.name }),
-                        el('td', { className: 'count' }, [
-                            el('strong', { text: String(r.levels.length) }),
-                            el('span', {
-                                className: 'muted small',
-                                text: ' of ' + r.game.levels.length,
-                            }),
-                        ]),
-                        el('td', null, levelChips(r.levels, 'level-chip record')),
-                    ])
-                );
-            }
-        }
-
-        if (!totals.some(t => t.held)) {
-            recordsNote.textContent =
-                'None of the selected players hold a top score in view. Levels nobody ' +
-                'has scored at all are in Never scored above — those are the cheapest ' +
-                'records to take.';
-            return;
-        }
-        recordsNote.textContent =
-            totals.map(t => t.name + ' ' + t.held).join(' · ') +
-            '. A record means the player’s best equals this location’s top score — an ' +
-            'exact tie counts, and so does a score that beat the board since the last ' +
-            'room walk. Follows the game and gamemode filters.';
     }
 
     function renderLevels(players) {
@@ -550,7 +485,6 @@
             levelsCard.hidden = true;
             farmerCard.hidden = true;
             unscoredCard.hidden = true;
-            recordsCard.hidden = true;
             return;
         }
 

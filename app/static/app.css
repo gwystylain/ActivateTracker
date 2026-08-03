@@ -141,7 +141,7 @@ table.level-table td.beat { font-variant-numeric: tabular-nums; }
 table.level-table td.beat.all { color: var(--ok); }
 table.level-table td.beat.none { color: var(--muted); }
 
-/* ---- /games: collapsible cards (point farmer, never scored) ---- */
+/* ---- collapsible cards (point farmer, never scored, records held) ---- */
 details.card-panel > summary { cursor: pointer; list-style-position: outside; }
 details.card-panel > summary > h2 { display: inline-block; margin: 0 0 0 4px; }
 details.card-panel > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -155,7 +155,8 @@ table.unscored td.count.full strong { color: var(--accent); }
     font-size: 0.85em; font-variant-numeric: tabular-nums; text-align: center;
 }
 
-/* ---- /games: top scores held ---- */
+/* ---- top scores held: the dashboard's Records held table, and the crowned
+       cells the /games breakdown marks for the same levels ---- */
 table.records td.count { font-variant-numeric: tabular-nums; }
 .level-chip.record {
     color: var(--gold); background: rgba(227, 179, 65, 0.12);
