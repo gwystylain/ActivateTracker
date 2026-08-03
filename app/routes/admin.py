@@ -271,6 +271,27 @@ async def manual_refresh(request: Request, background: BackgroundTasks):
     return RedirectResponse("/admin?refreshed=1", status_code=303)
 
 
+@router.post("/admin/refresh-catalog")
+async def manual_catalog_refresh(request: Request, background: BackgroundTasks):
+    """Poll scores *and* force a re-walk of every location's rooms.
+
+    The ordinary refresh only re-reads a location's rooms when that location's
+    score moved, so the game catalog and the venue's top scores can sit stale
+    through any number of quiet polls. This is the override. It costs one
+    request per room per location, so it's a separate button rather than the
+    default.
+    """
+    _require_session(request)
+    cfg = request.app.state.config
+    conn = request.app.state.db
+
+    async def run():
+        await poller.poll_all(conn, cfg.poll, force_catalog=True)
+
+    background.add_task(run)
+    return RedirectResponse("/admin?refreshed=catalog", status_code=303)
+
+
 # ---------- helpers ----------
 
 def _parse_locations(raw: str) -> list[tuple[int, str]]:

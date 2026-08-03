@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Games · activateTracker{% endblock %}
+{% block content %}
+{% if locations %}
+<section class="card">
+    <div class="card-header">
+        <h1>Games &amp; levels</h1>
+        <div class="header-actions">
+            <label class="inline-field">
+                <span>Location</span>
+                <select id="locationFilter">
+                    {% for loc in locations %}
+                    <option value="{{ loc.location_id }}">{{ loc.name }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            {% if logged_in %}
+                <form method="post" action="/admin/refresh" class="inline">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit">Refresh now</button>
+                </form>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="filters">
+        <label class="inline-field">
+            <span>Game</span>
+            <select id="gameFilter"><option value="">All games</option></select>
+        </label>
+        <label class="inline-field">
+            <span>Gamemode</span>
+            <select id="modeFilter"><option value="">All gamemodes</option></select>
+        </label>
+        <label class="inline-field checkbox">
+            <input type="checkbox" id="unbeatenOnly">
+            <span>Only gamemodes with a no score</span>
+        </label>
+    </div>
+
+    <fieldset class="players-filter">
+        <legend>Players</legend>
+        <div id="playerFilter" class="player-checks"></div>
+    </fieldset>
+
+    <p class="muted small" id="gamesStatus">Loading…</p>
+</section>
+
+<section class="card" id="farmerCard" hidden>
+    <details id="farmerPanel" open>
+        <summary><h2>Point farmer</h2></summary>
+        <p class="muted small">
+            Activate banks only your best-ever run per level, so a level nobody in the
+            group has scored is worth far more than beating an existing score. These are
+            the gamemodes with the most unscored player-level combinations — play these
+            and the group's totals move the most.
+        </p>
+        <div class="table-wrap">
+            <table class="data farmer">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Game</th>
+                        <th>Gamemode</th>
+                        <th>Open levels</th>
+                        <th>Points on the table</th>
+                    </tr>
+                </thead>
+                <tbody id="farmerBody"></tbody>
+            </table>
+        </div>
+        <p class="muted small" id="farmerNote"></p>
+    </details>
+</section>
+
+<section class="card" id="levelsCard" hidden>
+    <h2>Level breakdown</h2>
+    <div class="table-wrap">
+        <table class="data level-table" id="levelTable">
+            <thead id="levelHead"></thead>
+            <tbody id="levelBody"></tbody>
+        </table>
+    </div>
+    <p class="muted small">
+        Click a gamemode to see its levels. <strong>Top score</strong> is the best score
+        anyone at this location has posted; a dash means nobody there has scored it yet.
+    </p>
+</section>
+{% else %}
+<section class="card">
+    <h1>Games &amp; levels</h1>
+    <p class="muted">No tracked players yet. {% if logged_in %}Add one in <a href="/admin">Admin</a>.{% endif %}</p>
+</section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if locations %}
+<script src="/static/games.js?v={{ static_v('games.js') }}"></script>
+{% endif %}
+{% endblock %}

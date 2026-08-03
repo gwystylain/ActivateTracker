@@ -1,6 +1,7 @@
-"""Public, unauthenticated routes: landing page + chart data."""
+"""Public, unauthenticated routes: landing page, chart data, game breakdown."""
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from datetime import date, datetime
 from typing import Any
@@ -8,6 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
+from .. import catalog as catalog_mod
 from .. import streak as streak_mod
 from ..auth import csrf_token_for, read_session
 
@@ -135,7 +137,147 @@ async def chart_data(request: Request) -> JSONResponse:
     return JSONResponse({"players": payload})
 
 
+@router.get("/games", response_class=HTMLResponse)
+async def games(request: Request):
+    cfg = request.app.state.config
+    conn = request.app.state.db
+    templates = request.app.state.templates
+
+    session = read_session(cfg, request.cookies.get(cfg.session.cookie_name))
+    locations = _tracked_locations(conn)
+
+    return templates.TemplateResponse(
+        "games.html",
+        {
+            "request": request,
+            "locations": locations,
+            "logged_in": session is not None,
+            "csrf_token": csrf_token_for(session),
+        },
+    )
+
+
+@router.get("/api/game-data")
+async def game_data(request: Request, location_id: int | None = None) -> JSONResponse:
+    """Everything the /games page needs for one location, in one payload.
+
+    Sent whole rather than filtered server-side: a location is ~500 levels and
+    each player's beaten set is sparse, so the page can re-filter, expand rows
+    and re-rank Point Farmer without another round trip. Only changing the
+    location refetches.
+    """
+    conn = request.app.state.db
+    locations = _tracked_locations(conn)
+    if location_id is None:
+        location_id = locations[0]["location_id"] if locations else None
+    if location_id is None:
+        return JSONResponse(
+            {
+                "locations": [],
+                "location_id": None,
+                "catalog": None,
+                "players": [],
+                "rooms": [],
+                "top_scores": {},
+                "scores": {},
+            }
+        )
+
+    rooms = catalog_mod.rooms_for_location(conn, location_id)
+    top_scores = catalog_mod.top_scores_for_location(conn, location_id)
+    status = catalog_mod.status_for_location(conn, location_id)
+
+    # Current per-level scores only — the newest snapshot per player at this
+    # location. Older snapshots are history the /games page has no use for.
+    snapshot_rows = conn.execute(
+        """
+        SELECT s.player_id       AS player_id,
+               s.polled_at       AS polled_at,
+               s.raw_scores_json AS raw_scores_json,
+               p.handle          AS handle,
+               p.display_name    AS display_name
+        FROM score_snapshots s
+        JOIN players p ON p.id = s.player_id
+        WHERE s.location_id = ?
+          AND p.hidden = 0
+          AND s.id = (
+              SELECT s2.id FROM score_snapshots s2
+              WHERE s2.player_id = s.player_id AND s2.location_id = s.location_id
+              ORDER BY s2.polled_at DESC, s2.id DESC
+              LIMIT 1
+          )
+        ORDER BY p.handle
+        """,
+        (location_id,),
+    ).fetchall()
+
+    players: list[dict[str, Any]] = []
+    scores: dict[str, dict[str, dict[str, int]]] = {}
+    for r in snapshot_rows:
+        beaten: dict[str, dict[str, int]] = {}
+        try:
+            raw = json.loads(r["raw_scores_json"]) or []
+        except (json.JSONDecodeError, TypeError):
+            raw = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            high = int(entry.get("highScore") or 0)
+            if high <= 0:
+                continue  # a zero entry is "no score", same rule as levels_beat
+            beaten.setdefault(str(entry.get("gameId")), {})[
+                str(entry.get("levelId"))
+            ] = high
+        pid = str(r["player_id"])
+        scores[pid] = beaten
+        players.append(
+            {
+                "id": r["player_id"],
+                "handle": r["handle"],
+                "display_name": r["display_name"] or r["handle"],
+                "polled_at": r["polled_at"],
+                "levels_beat": sum(len(v) for v in beaten.values()),
+            }
+        )
+
+    return JSONResponse(
+        {
+            "locations": locations,
+            "location_id": location_id,
+            "catalog": status,
+            "players": players,
+            "rooms": rooms,
+            "top_scores": {
+                str(game_id): {str(lvl): sc for lvl, sc in levels.items()}
+                for game_id, levels in top_scores.items()
+            },
+            "scores": scores,
+        }
+    )
+
+
 # ---------- helpers ----------
+
+def _tracked_locations(conn) -> list[dict[str, Any]]:
+    """Distinct locations any visible player is tracked at, label included."""
+    rows = conn.execute(
+        """
+        SELECT DISTINCT pl.location_id AS location_id, pl.slug AS slug
+        FROM player_locations pl
+        JOIN players p ON p.id = pl.player_id
+        WHERE p.hidden = 0
+        ORDER BY pl.slug
+        """
+    ).fetchall()
+    return [
+        {
+            "location_id": r["location_id"],
+            "slug": r["slug"],
+            "name": _location_label(r["slug"]),
+        }
+        for r in rows
+    ]
+
 
 def _location_label(slug: str) -> str:
     """Human-readable location name from its slug (e.g. 'langley' -> 'Langley')."""

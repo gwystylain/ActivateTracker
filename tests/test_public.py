@@ -3,7 +3,7 @@ from datetime import date
 from types import SimpleNamespace
 
 from app import db as db_mod
-from app.routes.public import _build_player_summaries, chart_data
+from app.routes.public import _build_player_summaries, chart_data, game_data
 
 TODAY = date(2026, 8, 3)
 
@@ -133,6 +133,151 @@ async def test_chart_excludes_hidden_players(tmp_path):
     conn.execute("UPDATE players SET hidden = 1 WHERE id = ?", (pid,))
 
     assert (await _chart(conn))["players"] == []
+
+
+# ---------- /api/game-data ----------
+
+def _seed_catalog(conn, location_id=72):
+    conn.executemany(
+        "INSERT INTO location_games (location_id, room_id, room_name, room_order,"
+        " game_id, game_name, game_order, levels_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (location_id, 10, "Hoops", 0, 1003, "Barrage", 0, "[0, 1, 2]"),
+            (location_id, 10, "Hoops", 0, 1001, "Simon Says", 1, "[0, 1, 2]"),
+            (location_id, 28, "Scan", 1, 2802, "Spot", 0, "[0, 1]"),
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO location_top_scores (location_id, game_id, level_id, top_score)"
+        " VALUES (?, ?, ?, ?)",
+        [(location_id, 1003, 0, 2062), (location_id, 1003, 1, 3046)],
+    )
+    conn.execute(
+        "INSERT INTO location_catalog (location_id, level_count, catalog_levels, fetched_at)"
+        " VALUES (?, 8, 8, '2026-08-03T00:00:00+00:00')",
+        (location_id,),
+    )
+
+
+def _snap_scores(conn, pid, loc, polled_at, scores, total=1000):
+    conn.execute(
+        "INSERT INTO score_snapshots (player_id, location_id, polled_at, total_score,"
+        " yearly_score, raw_scores_json) VALUES (?, ?, ?, ?, 0, ?)",
+        (pid, loc, polled_at, total, json.dumps(scores)),
+    )
+
+
+async def _game_data(conn, location_id=None):
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=conn)))
+    return json.loads((await game_data(request, location_id=location_id)).body)
+
+
+async def test_game_data_returns_catalog_and_sparse_beaten_levels(tmp_path):
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _seed_catalog(conn)
+    _snap_scores(conn, pid, 72, "2026-08-01T00:00:00", [
+        {"gameId": 1003, "levelId": 0, "highScore": 2000},
+        {"gameId": 1003, "levelId": 1, "highScore": 2500},
+    ])
+
+    payload = await _game_data(conn, 72)
+
+    assert [r["name"] for r in payload["rooms"]] == ["Hoops", "Scan"]
+    # Gamemodes keep the site's own order within the room, not id order.
+    assert [g["name"] for g in payload["rooms"][0]["games"]] == ["Barrage", "Simon Says"]
+    assert payload["rooms"][0]["games"][0]["levels"] == [0, 1, 2]
+    assert payload["catalog"]["catalog_levels"] == 8
+
+    # Only beaten levels are sent; everything absent is a "No score".
+    assert payload["scores"][str(pid)] == {"1003": {"0": 2000, "1": 2500}}
+    assert payload["top_scores"] == {"1003": {"0": 2062, "1": 3046}}
+    (player,) = payload["players"]
+    assert player["levels_beat"] == 2
+
+
+async def test_game_data_treats_a_zero_high_score_as_no_score(tmp_path):
+    """Same rule as levels_beat: a zero entry is a level the player hasn't beaten."""
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _seed_catalog(conn)
+    _snap_scores(conn, pid, 72, "2026-08-01T00:00:00", [
+        {"gameId": 1003, "levelId": 0, "highScore": 0},
+        {"gameId": 1003, "levelId": 1, "highScore": 900},
+    ])
+
+    payload = await _game_data(conn, 72)
+    assert payload["scores"][str(pid)] == {"1003": {"1": 900}}
+    assert payload["players"][0]["levels_beat"] == 1
+
+
+async def test_game_data_uses_only_the_newest_snapshot(tmp_path):
+    """Historic per-level data has no value here — only the current run counts."""
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _seed_catalog(conn)
+    _snap_scores(conn, pid, 72, "2026-07-01T00:00:00", [
+        {"gameId": 1003, "levelId": 0, "highScore": 100},
+    ])
+    _snap_scores(conn, pid, 72, "2026-08-02T00:00:00", [
+        {"gameId": 1003, "levelId": 0, "highScore": 2000},
+        {"gameId": 1001, "levelId": 2, "highScore": 4000},
+    ])
+
+    payload = await _game_data(conn, 72)
+    assert payload["scores"][str(pid)] == {"1003": {"0": 2000}, "1001": {"2": 4000}}
+
+
+async def test_game_data_scopes_to_one_location(tmp_path):
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _seed_catalog(conn, location_id=72)
+    _snap_scores(conn, pid, 72, "2026-08-01T00:00:00",
+                 [{"gameId": 1003, "levelId": 0, "highScore": 111}])
+    _snap_scores(conn, pid, 38, "2026-08-01T00:00:00",
+                 [{"gameId": 1003, "levelId": 1, "highScore": 222}])
+
+    langley = await _game_data(conn, 72)
+    coquitlam = await _game_data(conn, 38)
+
+    assert langley["scores"][str(pid)] == {"1003": {"0": 111}}
+    assert coquitlam["scores"][str(pid)] == {"1003": {"1": 222}}
+    # Coquitlam was never catalogued: the page has to cope with an empty one.
+    assert coquitlam["rooms"] == []
+    assert coquitlam["catalog"] is None
+
+
+async def test_game_data_defaults_to_the_first_tracked_location(tmp_path):
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _snap_scores(conn, pid, 38, "2026-08-01T00:00:00", [])
+
+    payload = await _game_data(conn)
+    # _tracked_locations orders by slug, so coquitlam leads langley.
+    assert payload["location_id"] == 38
+    assert [loc["name"] for loc in payload["locations"]] == ["Coquitlam", "Langley"]
+
+
+async def test_game_data_excludes_hidden_players(tmp_path):
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _seed_catalog(conn)
+    _snap_scores(conn, pid, 72, "2026-08-01T00:00:00",
+                 [{"gameId": 1003, "levelId": 0, "highScore": 111}])
+    conn.execute("UPDATE players SET hidden = 1 WHERE id = ?", (pid,))
+
+    payload = await _game_data(conn, 72)
+    assert payload["players"] == []
+    assert payload["scores"] == {}
+    assert payload["locations"] == []
+
+
+async def test_game_data_with_no_players_at_all(tmp_path):
+    conn = _conn(tmp_path)
+    payload = await _game_data(conn)
+    assert payload["location_id"] is None
+    assert payload["rooms"] == []
+    assert payload["players"] == []
 
 
 def test_summary_ignores_locations_with_null_columns(tmp_path):

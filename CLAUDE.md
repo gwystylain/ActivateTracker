@@ -91,19 +91,23 @@ at that path silently.
 changes. Editing display name / locations leaves the 30-day clock alone. Any new
 `initial_streak > 0` writes today's date as the baseline; `0` clears it.
 
-### Test fixture is a real captured response
-`tests/fixtures/gmebagholder_langley.html` is a 378 KB capture of a live playactivate page.
+### Test fixtures are real captured responses
+`tests/fixtures/gmebagholder_langley.html` is a 378 KB capture of a live playactivate *location*
+page; `tests/fixtures/coquitlam_hoops.html` is a 361 KB capture of a *room* page.
 `extract_player_blob` anchors on the unique `"player":{"player":{"playerName"` substring and
-walks braces (handling escaped quotes in strings). If the site's hydration shape changes, this
-fixture and the anchor regex are the canary.
+walks braces (handling escaped quotes in strings); `_extract_json_value` does the same by key name
+for the room page's `roomInfo` / `roomGames` / `roomScores`, generalised to `[...]` values. If the
+site's hydration shape changes, these fixtures and the anchor regex are the canary.
 
 ### Schema is bootstrapped, not migrated
 `db.init_schema` runs `CREATE TABLE IF NOT EXISTS ...` on every startup. There is no migration
 framework. Adding a column to an existing table means adding it to `SCHEMA` *and* to `db._migrate`
 as a `PRAGMA table_info`-guarded `ALTER TABLE` — `CREATE TABLE IF NOT EXISTS` is a no-op on a
 deployment whose table already exists, so new columns only reach it through `_migrate`. Backfilled
-columns are NULL on old rows, so readers must tolerate None. Existing deployments' SQLite at
-`/data/tracker.db` survives container rebuilds via the compose volume.
+columns are NULL on old rows, so readers must tolerate None. Adding a whole new *table* needs only
+the `SCHEMA` entry (that's why `location_games` / `location_top_scores` / `location_catalog` have
+no `_migrate` clause). Existing deployments' SQLite at `/data/tracker.db` survives container
+rebuilds via the compose volume.
 
 ### Rank and levels-beat come from the same page as the score
 `score_snapshots.player_rank` is the *per-location* leaderboard rank (`playerLocation.playerRank`),
@@ -116,8 +120,58 @@ exactly (checked live at coquitlam 106/490 and langley 49/510). The JSON blob is
 anchor than the Tailwind-classed `<p>`, so we derive rather than scrape the rendered string — but
 that string is the ground truth to re-check against if the number ever looks wrong. Note the
 committed langley fixture is an old capture (40/470), so fixture numbers lag live ones. Across
-multiple handles
-`combine_results` takes the *union* of beaten `(gameId, levelId)` pairs rather than summing, or a
-level both profiles cleared would count twice. On the dashboard the headline row shows the best
-(lowest) rank and the highest levels-beat across the player's locations, with the per-location
-values in the expandable rows.
+multiple handles `combine_results` merges the `scores` lists by `(gameId, levelId)` keeping the
+better `highScore` and counts *that*, rather than summing — a level both profiles cleared would
+otherwise count twice. On the dashboard the headline row shows the best (lowest) rank and the
+highest levels-beat across the player's locations, with the per-location values in the expandable
+rows.
+
+### /games: per-level breakdown and Point Farmer
+Terminology differs from the site's. What the UI calls a **Game** is the site's *room* (Hoops);
+what it calls a **gamemode** is the site's *game* (`roomGames[].id`, e.g. 1003 "Barrage"); a
+**level** is `levelId`, 0-based in the data and displayed +1. `gameId // 100 == roomId`.
+
+**Per-player level data costs no extra requests.** `playerLocation.scores` on the location page
+already covers *every room at the location*, and `persist_snapshot` already writes it verbatim to
+`score_snapshots.raw_scores_json`. `/api/game-data` reads the newest snapshot per
+`(player, location)` and emits only levels with `highScore > 0`; everything absent renders as
+"No score". Historic snapshots are ignored — Activate banks only the best-ever run, so the current
+row is the whole truth.
+
+What *does* need fetching is the catalog (which gamemodes and levels exist) and each location's
+top scores, which live only on room pages — one request per room. `app/catalog.py` owns this:
+`needs_refresh` re-walks a location when it has never been catalogued, when a player's score there
+rose in this poll (the deliberate throttle: no score change, no room requests), or when the stored
+`catalog_levels` no longer matches `location.levelCount`. `poller.poll_all` dedupes to **one walk
+per location per poll**, not one per player, and a catalog failure never fails the score poll.
+
+That throttle has one blind spot by design: `roomScores` is the whole venue's top score, set by
+people we don't track, so a location where none of *our* players moved never gets its top scores
+re-read. `poll_all(..., force_catalog=True)` overrides it, exposed as the admin page's
+**Refresh + rebuild catalog** button (`POST /admin/refresh-catalog`) alongside the ordinary
+throttled **Refresh all now**.
+
+### The room-page URL segment is the room name, not the marketing slug
+`scraper.room_slug` lowercases and percent-encodes `location.rooms[].name`: `Hoops` → `hoops`,
+`Mega Grid` → `mega%20grid`. The marketing slugs under `/rooms` are a different id space and the
+scores route rejects them — `mega-grid` **302s to the location page**, which parses fine and
+carries no `roomInfo`. `parse_room_html` raises `ScrapeError` on a missing `roomInfo` precisely so
+that soft failure can't quietly record a room as having no gamemodes.
+
+### The catalog validates itself against levelCount
+Summing `len(levels)` over a location's rooms equals `location.levelCount` exactly (verified live:
+coquitlam 490, langley 510). `catalog.refresh_location` recomputes that sum from the table after
+each walk — so a partial refresh is recorded honestly — and logs a warning on a mismatch.
+A short count also makes `needs_refresh` retry on the next poll.
+
+The per-room gamemode lists were identical at both locations probed, but `location_games` is keyed
+per location anyway so one location's layout can never corrupt another's.
+
+### roomScores is per-location and sparse
+`roomScores` is the best score anyone *at that location* has posted, not a global best: coquitlam
+and langley disagree on every shared Hoops entry. It is also sparse — langley returns 38 rows
+where coquitlam returns 40 — and a missing entry means nobody at that location has ever scored
+that level. The `/games` table shows that as a dash. Point Farmer can't, since a level nobody has
+touched would then rank *below* one people have already played, which is backwards; `games.js`
+substitutes the median top score for the same level index across the location (scores track the
+level number closely, level 1 ≈ 2k up to level 10 ≈ 10k).

@@ -51,6 +51,39 @@ CREATE TABLE IF NOT EXISTS visits (
 CREATE INDEX IF NOT EXISTS ix_visits_player_date
     ON visits (player_id, visit_date);
 
+-- Game catalog for a location: which rooms it has and which gamemodes live in
+-- each. Keyed per location even though the per-room gamemode lists were
+-- identical at both locations probed, so one location's layout can never
+-- corrupt another's. Refreshed by app/catalog.py, not by the score poll.
+CREATE TABLE IF NOT EXISTS location_games (
+    location_id INTEGER NOT NULL,
+    room_id     INTEGER NOT NULL,
+    room_name   TEXT    NOT NULL,
+    room_order  INTEGER NOT NULL,   -- position in location.rooms
+    game_id     INTEGER NOT NULL,   -- game_id // 100 == room_id
+    game_name   TEXT    NOT NULL,
+    game_order  INTEGER NOT NULL,   -- roomGames[].roomIndex
+    levels_json TEXT    NOT NULL,   -- level ids, e.g. "[0,1,2,...,9]"
+    PRIMARY KEY (location_id, room_id, game_id)
+);
+
+-- Best score anyone at this location has posted per level. Sparse: a missing
+-- row means nobody at the location has ever scored that level.
+CREATE TABLE IF NOT EXISTS location_top_scores (
+    location_id INTEGER NOT NULL,
+    game_id     INTEGER NOT NULL,
+    level_id    INTEGER NOT NULL,
+    top_score   INTEGER NOT NULL,
+    PRIMARY KEY (location_id, game_id, level_id)
+);
+
+CREATE TABLE IF NOT EXISTS location_catalog (
+    location_id    INTEGER PRIMARY KEY,
+    level_count    INTEGER,          -- location.levelCount when last fetched
+    catalog_levels INTEGER NOT NULL, -- levels we actually catalogued
+    fetched_at     TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS login_attempts (
     ip           TEXT NOT NULL,
     attempted_at TEXT NOT NULL

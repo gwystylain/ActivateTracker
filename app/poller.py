@@ -12,6 +12,7 @@ from typing import Iterable
 from curl_cffi.requests import AsyncSession
 from curl_cffi.requests.exceptions import RequestException
 
+from . import catalog as catalog_mod
 from . import scraper
 from .config import PollConfig
 from .db import transaction
@@ -43,11 +44,23 @@ def format_handles(handles: list[str]) -> str:
     return ", ".join(handles)
 
 
-async def poll_all(conn: sqlite3.Connection, poll_cfg: PollConfig) -> dict[str, int]:
+async def poll_all(
+    conn: sqlite3.Connection,
+    poll_cfg: PollConfig,
+    *,
+    force_catalog: bool = False,
+) -> dict[str, int]:
     """Poll every tracked (player, location). Returns counters for logging.
 
     Serialised on a global lock so the manual button can't pile up concurrent
     polls or race the daily scheduler.
+
+    `force_catalog` re-walks every location's rooms even when nothing suggests
+    it changed. Normally the walk is throttled to score changes (see
+    `catalog.needs_refresh`), which keeps a quiet poll to one request per
+    player — but that also means the locations' *top* scores only get re-read
+    when one of our own players moves. Other people at the venue keep setting
+    new ones, so the admin page offers this as an explicit override.
     """
     if _poll_lock.locked():
         log.info("poll_all skipped: another poll is in progress")
@@ -66,12 +79,25 @@ async def poll_all(conn: sqlite3.Connection, poll_cfg: PollConfig) -> dict[str, 
             """
         ).fetchall()
 
-        counters = {"polled": 0, "errors": 0, "visits_inserted": 0, "snapshots": 0}
+        counters = {
+            "polled": 0,
+            "errors": 0,
+            "visits_inserted": 0,
+            "snapshots": 0,
+            "catalog_locations": 0,
+            "catalog_rooms": 0,
+            "catalog_errors": 0,
+        }
         if not rows:
             return counters
 
         jitter_lo, jitter_hi = poll_cfg.jitter_seconds
         first_request = True
+        # One entry per location, not per player: the catalog is player-
+        # independent, so several players at one location still cost one
+        # refresh. `changed` is sticky — any player's score rising there is
+        # enough to re-read the room pages.
+        seen_locations: dict[int, dict] = {}
 
         async with AsyncSession() as session:
             for row in rows:
@@ -108,6 +134,55 @@ async def poll_all(conn: sqlite3.Connection, poll_cfg: PollConfig) -> dict[str, 
                 counters["snapshots"] += 1
                 if inserted_visit:
                     counters["visits_inserted"] += 1
+
+                loc = seen_locations.setdefault(
+                    combined.location_id,
+                    {
+                        "slug": row["slug"],
+                        # A handle that just fetched cleanly, so the room pages
+                        # will resolve too. Not `combined.handle`, which is the
+                        # comma-joined list for a multi-handle player.
+                        "handle": results[0].handle,
+                        "rooms": combined.rooms,
+                        "level_count": combined.level_count,
+                        "changed": False,
+                    },
+                )
+                loc["changed"] = loc["changed"] or inserted_visit
+                if combined.rooms:
+                    loc["rooms"] = combined.rooms
+                    loc["level_count"] = combined.level_count
+
+            for location_id, loc in seen_locations.items():
+                if not loc["rooms"]:
+                    continue  # nothing to walk — the location page gave no rooms
+                if not force_catalog and not catalog_mod.needs_refresh(
+                    conn,
+                    location_id,
+                    level_count=loc["level_count"],
+                    score_changed=loc["changed"],
+                ):
+                    continue
+                try:
+                    got = await catalog_mod.refresh_location(
+                        conn,
+                        session,
+                        location_id=location_id,
+                        slug=loc["slug"],
+                        handle=loc["handle"],
+                        rooms=loc["rooms"],
+                        level_count=loc["level_count"],
+                        poll_cfg=poll_cfg,
+                    )
+                except Exception:
+                    # A catalog problem must never take the score poll down —
+                    # the scores are already committed by this point.
+                    counters["catalog_errors"] += 1
+                    log.exception("catalog refresh failed location=%s", location_id)
+                    continue
+                counters["catalog_locations"] += 1
+                counters["catalog_rooms"] += got["rooms"]
+                counters["catalog_errors"] += got["errors"]
 
         log.info("poll_all done: %s", counters)
         return counters

@@ -97,6 +97,50 @@ table.player-summary tr.loc-row td.loc-name { padding-left: 32px; }
 .segmented button[aria-pressed="true"] { background: var(--accent); color: #0d1117; }
 .segmented button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
+/* ---- /games: filters ---- */
+.filters { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; margin: 16px 0 4px; }
+.inline-field { display: inline-flex; flex-direction: column; gap: 4px; margin: 0; }
+.inline-field > span { margin: 0; color: var(--muted); font-size: 0.9em; }
+.inline-field.checkbox { flex-direction: row; align-items: center; gap: 6px; }
+.inline-field.checkbox > span { color: var(--text); }
+select {
+    padding: 7px 10px; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px;
+    font-family: inherit; font-size: inherit;
+}
+select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+.players-filter { border: 1px solid var(--border); border-radius: 4px; padding: 8px 14px 12px; margin: 16px 0 0; }
+.players-filter legend { color: var(--muted); font-size: 0.9em; padding: 0 6px; }
+.player-checks { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.player-check { display: inline-flex; align-items: center; gap: 6px; margin: 0; cursor: pointer; }
+
+/* ---- /games: level table ---- */
+table.level-table tr.room-row th {
+    background: var(--panel-2); color: var(--text); font-size: 0.85em;
+    letter-spacing: 0.06em; text-transform: uppercase;
+}
+table.level-table tr.game-row { cursor: pointer; }
+table.level-table tr.game-row:hover { background: var(--panel-2); }
+table.level-table tr.game-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+table.level-table tr.game-row.expanded .toggle { transform: rotate(90deg); }
+table.level-table .toggle {
+    display: inline-block; width: 1em; margin-right: 4px; color: var(--muted);
+    transition: transform 0.12s ease;
+}
+table.level-table td.level-name { padding-left: 32px; color: var(--muted); }
+table.level-table tr.level-row td { background: var(--panel-2); }
+table.level-table td.no-score { color: var(--muted); font-style: italic; }
+table.level-table td.beat { font-variant-numeric: tabular-nums; }
+table.level-table td.beat.all { color: var(--ok); }
+table.level-table td.beat.none { color: var(--muted); }
+
+/* ---- /games: point farmer ---- */
+#farmerPanel > summary { cursor: pointer; list-style-position: outside; }
+#farmerPanel > summary > h2 { display: inline-block; margin: 0 0 0 4px; }
+#farmerPanel > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+table.farmer td { font-variant-numeric: tabular-nums; }
+
 .actions { white-space: nowrap; }
 .actions .button-link {
     display: inline-block; background: var(--panel-2); color: var(--text);

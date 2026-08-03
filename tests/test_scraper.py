@@ -8,9 +8,12 @@ from app.scraper import (
     combine_results,
     extract_player_blob,
     parse_html,
+    parse_room_html,
+    room_slug,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "gmebagholder_langley.html"
+ROOM_FIXTURE = Path(__file__).parent / "fixtures" / "coquitlam_hoops.html"
 
 
 def test_extracts_player_blob_from_real_html():
@@ -86,7 +89,7 @@ def test_combine_results_sums_totals_and_takes_best_ranks():
     assert c.player_rank == 3
     # Combined handle is the comma-joined input
     assert c.handle == "stebb,stevo"
-    # Scores list is dropped on combine (not used for display)
+    # Neither input carried per-level scores, so there's nothing to merge.
     assert c.scores == []
 
 
@@ -126,12 +129,90 @@ def test_combine_results_unions_levels_beat_across_handles():
     assert c.level_count == 470
 
 
+def test_combine_results_merges_scores_taking_the_better_run():
+    """The /games page reads per-level scores off the merged result, so a level
+    either profile cleared must survive the combine at its better score."""
+    a = _r("stebb", total=10, scores=[
+        {"gameId": 1003, "levelId": 0, "highScore": 50},
+        {"gameId": 1003, "levelId": 1, "highScore": 60},
+    ])
+    b = _r("stevo", total=20, scores=[
+        {"gameId": 1003, "levelId": 0, "highScore": 90},   # better than stebb's
+        {"gameId": 1004, "levelId": 0, "highScore": 30},
+    ])
+    c = combine_results([a, b])
+
+    assert c.scores == [
+        {"gameId": 1003, "levelId": 0, "highScore": 90},
+        {"gameId": 1003, "levelId": 1, "highScore": 60},
+        {"gameId": 1004, "levelId": 0, "highScore": 30},
+    ]
+    assert c.levels_beat == 3
+
+
+def test_combine_results_keeps_zero_scores_out_of_levels_beat():
+    a = _r("stebb", total=10, scores=[{"gameId": 1, "levelId": 0, "highScore": 0}])
+    b = _r("stevo", total=20, scores=[{"gameId": 1, "levelId": 1, "highScore": 7}])
+    c = combine_results([a, b])
+    assert len(c.scores) == 2      # the zero entry is still carried
+    assert c.levels_beat == 1      # but it isn't a level beaten
+
+
 def test_combine_results_handles_partial_nones():
     a = _r("a", total=10, stars=None, location_player_rank=5)
     b = _r("b", total=20, stars=4,    location_player_rank=None)
     c = combine_results([a, b])
     assert c.stars == 4                  # only one had a value
     assert c.location_player_rank == 5   # only one had a value
+
+
+def test_room_slug_is_the_lowercased_room_name():
+    """The scores route keys on the room name, not the marketing slug — the
+    marketing `mega-grid` 302s back to the location page."""
+    assert room_slug("Hoops") == "hoops"
+    assert room_slug("Mega Grid") == "mega%20grid"
+    assert room_slug("  Mega Laser ") == "mega%20laser"
+
+
+def test_parse_room_html_reads_gamemodes_and_top_scores():
+    html = ROOM_FIXTURE.read_text(encoding="utf-8")
+    r = parse_room_html(html, room_name="Hoops")
+
+    assert r.room_id == 10
+    assert r.room_name == "Hoops"
+    assert [(g.game_id, g.name) for g in r.games] == [
+        (1001, "Simon Says"),
+        (1002, "Trivial"),
+        (1003, "Barrage"),
+        (1004, "15 Green"),
+    ]
+    # Every gamemode carries its own level ids, 0-based.
+    assert all(g.levels == tuple(range(10)) for g in r.games)
+    assert r.level_total == 40
+    # roomIndex is the site's display order, not the id order.
+    assert [g.order for g in r.games] == [3, 2, 0, 1]
+    # roomScores is the location's top score per level.
+    assert r.top_scores[(1001, 0)] == 2041
+    assert r.top_scores[(1003, 5)] == 6795
+
+
+def test_parse_room_html_raises_when_redirected_to_the_location_page():
+    """An unknown room segment 302s to the location page instead of 404ing.
+    That page parses fine but has no roomInfo — without this the catalog would
+    silently record the room as having no gamemodes."""
+    location_page = FIXTURE.read_text(encoding="utf-8")
+    with pytest.raises(ScrapeError, match="roomInfo"):
+        parse_room_html(location_page, room_name="Mega Grid")
+
+
+def test_parse_html_carries_the_location_room_list():
+    html = ROOM_FIXTURE.read_text(encoding="utf-8")
+    r = parse_html(html, handle="gmebagholder", location_id=38, slug="coquitlam")
+    # Present on every page for the location, which is what lets the catalog
+    # walk the rooms without a separate request.
+    assert r.rooms[0] == {"id": 10, "name": "Hoops"}
+    assert {room["name"] for room in r.rooms} >= {"Hoops", "Mega Grid", "Scan"}
+    assert r.level_count == 490
 
 
 def test_brace_balance_handles_strings_and_escapes():

@@ -5,14 +5,31 @@
 <section class="card">
     <div class="card-header">
         <h1>Admin</h1>
-        <form method="post" action="/admin/refresh" class="inline">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button type="submit">Refresh all now</button>
-        </form>
+        <div class="header-actions">
+            <form method="post" action="/admin/refresh" class="inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit">Refresh all now</button>
+            </form>
+            <form method="post" action="/admin/refresh-catalog" class="inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit">Refresh + rebuild catalog</button>
+            </form>
+        </div>
     </div>
-    {% if request.query_params.get('refreshed') %}
+    {% set refreshed = request.query_params.get('refreshed') %}
+    {% if refreshed == 'catalog' %}
+        <p class="ok">Refresh started in background, re-reading every room at every location.
+            That's one request per room, so give it a minute before reloading.</p>
+    {% elif refreshed %}
         <p class="ok">Refresh started in background. Reload the public page in a few seconds.</p>
     {% endif %}
+    <p class="muted small">
+        <strong>Refresh all now</strong> polls every player's scores, and re-reads a location's
+        games only if a score there moved &mdash; which is what keeps a quiet poll down to one
+        request per player. Use <strong>Refresh + rebuild catalog</strong> when Activate has
+        changed a room, or to pull fresh top scores for the
+        <a href="/games">games page</a> after other people have been playing.
+    </p>
 
     <h2>Tracked players</h2>
     {% if players %}
