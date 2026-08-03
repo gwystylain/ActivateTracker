@@ -63,6 +63,114 @@
         return node;
     }
 
+    // ---------- gamemode descriptions ----------
+    //
+    // The rules for each gamemode ride along on the payload (see
+    // app/game_descriptions.py); the site itself has no such text. One shared
+    // bubble is refilled and moved rather than one per cell, because these
+    // tables are torn down and rebuilt on every filter change. It hangs off
+    // <body> and is position: fixed so that .table-wrap's horizontal scroll
+    // can't clip it — an in-cell popover would be cut off at the table edge.
+
+    const tip = el('div', { className: 'mode-tip', attrs: { id: 'modeTip', role: 'tooltip' } });
+    tip.hidden = true;
+    document.body.appendChild(tip);
+    let tipOn = null;       // element currently carrying aria-describedby
+    let tipAnchor = null;   // element the bubble is placed against
+
+    // The gamemode's name, made hoverable when the document covers it.
+    // `focusable` only where the name is the sole thing to land on: in the
+    // level table the row is already the tab stop, and a second one nested
+    // inside its role="button" would misdescribe the structure.
+    function modeName(game, focusable) {
+        if (!game.description) return el('span', { text: game.name });
+        const node = el('span', { className: 'mode-name', text: game.name });
+        node.dataset.desc = game.description;
+        if (focusable) node.tabIndex = 0;
+        return node;
+    }
+
+    function showTip(anchor, target) {
+        tip.textContent = anchor.dataset.desc;
+        tip.hidden = false;
+        tipAnchor = anchor;
+        placeTip();
+
+        if (tipOn && tipOn !== target) tipOn.removeAttribute('aria-describedby');
+        target.setAttribute('aria-describedby', 'modeTip');
+        tipOn = target;
+    }
+
+    // Measured only once the bubble is filled and visible. Below the name by
+    // default, flipped above when it would run off the bottom and there is room
+    // up top; clamped horizontally either way.
+    function placeTip() {
+        const r = tipAnchor.getBoundingClientRect();
+        const gap = 8;
+        const h = tip.offsetHeight;
+        let left = Math.min(r.left, window.innerWidth - tip.offsetWidth - gap);
+        if (left < gap) left = gap;
+        let top = r.bottom + gap;
+        if (top + h > window.innerHeight - gap && r.top - gap - h > gap) {
+            top = r.top - gap - h;
+        }
+        tip.style.left = left + 'px';
+        tip.style.top = top + 'px';
+    }
+
+    function hideTip() {
+        // Every mouse move over the page reaches this; nothing showing, nothing
+        // to write.
+        if (tip.hidden) return;
+        if (tipOn) tipOn.removeAttribute('aria-describedby');
+        tipOn = null;
+        tipAnchor = null;
+        tip.hidden = true;
+    }
+
+    // Delegated, since every row is re-created on each render. A single
+    // mouseover handler covers leaving too: moving off a name fires on
+    // whatever is underneath next, and anything that isn't a name dismisses.
+    document.addEventListener('mouseover', e => {
+        if (!e.target.closest || tip.contains(e.target)) return;   // reading a long one
+        const name = e.target.closest('.mode-name[data-desc]');
+        if (!name) {
+            hideTip();
+            return;
+        }
+        showTip(name, name.closest('tr.game-row') || name);
+    });
+    document.addEventListener('mouseleave', hideTip);
+
+    document.addEventListener('focusin', e => {
+        if (!e.target.closest) return;
+        const row = e.target.closest('tr.game-row');
+        const name = e.target.matches('.mode-name[data-desc]')
+            ? e.target
+            : (row && row.querySelector('.mode-name[data-desc]'));
+        if (!name) {
+            hideTip();
+            return;
+        }
+        showTip(name, row || name);
+    });
+    document.addEventListener('focusout', hideTip);
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') hideTip();
+    });
+    // A fixed bubble doesn't travel with its anchor, so anything that moves the
+    // page underneath it has to re-place it. Re-place rather than dismiss:
+    // tabbing to a name below the fold scrolls it into view, and that scroll
+    // would otherwise close the bubble the same keypress just opened. Capture,
+    // because the scrolling is often .table-wrap's rather than the window's.
+    function followTip() {
+        if (!tipAnchor) return;
+        if (tipAnchor.isConnected) placeTip();
+        else hideTip();
+    }
+    window.addEventListener('scroll', followTip, true);
+    window.addEventListener('resize', followTip);
+
     // ---------- data helpers ----------
 
     function games() {
@@ -197,14 +305,16 @@
         modeSel.replaceChildren(el('option', { text: 'All gamemodes', attrs: { value: '' } }));
         for (const { room, game } of games()) {
             if (roomId && String(room.room_id) !== roomId) continue;
-            modeSel.appendChild(
-                el('option', {
-                    // Prefixed when showing every room's modes, since gamemode
-                    // names repeat across rooms (Grid → "Grid", Mega Grid → "Mega Grid").
-                    text: roomId ? game.name : room.name + ' → ' + game.name,
-                    attrs: { value: String(game.game_id) },
-                })
-            );
+            const opt = el('option', {
+                // Prefixed when showing every room's modes, since gamemode
+                // names repeat across rooms (Grid → "Grid", Mega Grid → "Mega Grid").
+                text: roomId ? game.name : room.name + ' → ' + game.name,
+                attrs: { value: String(game.game_id) },
+            });
+            // A native title, not the bubble: an open <select>'s options are
+            // drawn by the OS and nothing in the page can position against them.
+            if (game.description) opt.title = game.description;
+            modeSel.appendChild(opt);
         }
         modeSel.value = [...modeSel.options].some(o => o.value === prev) ? prev : '';
     }
@@ -232,6 +342,7 @@
     // ---------- rendering ----------
 
     function render() {
+        hideTip();
         const players = activePlayers();
         renderFarmer(players);
         renderUnscored();
@@ -275,7 +386,7 @@
                 el('tr', null, [
                     el('td', { className: 'muted', text: String(i + 1) }),
                     el('td', { text: r.room.name }),
-                    el('td', { text: r.game.name }),
+                    el('td', null, [modeName(r.game, true)]),
                     el('td', null, [
                         el('strong', { text: String(r.open) }),
                         el('span', { className: 'muted small', text: ' of ' + r.slots }),
@@ -319,7 +430,7 @@
             unscoredBody.appendChild(
                 el('tr', null, [
                     el('td', { text: r.room.name }),
-                    el('td', { text: r.game.name }),
+                    el('td', null, [modeName(r.game, true)]),
                     el('td', {
                         className: 'count' + (r.levels.length === total ? ' full' : ''),
                     }, [
@@ -356,6 +467,8 @@
     }
 
     function renderLevels(players) {
+        // Expanding a row re-creates every row under it, anchor included.
+        hideTip();
         const rows = visibleGames();
         levelsCard.hidden = !rows.length;
         if (!rows.length) return;
@@ -402,7 +515,7 @@
         }, [
             el('td', null, [
                 el('span', { className: 'toggle', text: '▸', attrs: { 'aria-hidden': 'true' } }),
-                el('span', { text: game.name }),
+                modeName(game),
             ]),
             el('td', {
                 className: 'muted small',

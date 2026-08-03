@@ -285,6 +285,35 @@ async def test_game_data_with_no_players_at_all(tmp_path):
     assert payload["players"] == []
 
 
+async def test_game_data_carries_each_gamemodes_description(tmp_path):
+    """The /games tooltips: static text keyed by room and gamemode name."""
+    conn = _conn(tmp_path)
+    _seed_player(conn)
+    _seed_catalog(conn)
+
+    payload = await _game_data(conn, 72)
+
+    by_room = {r["name"]: {g["name"]: g["description"] for g in r["games"]}
+               for r in payload["rooms"]}
+    assert by_room["Hoops"]["Barrage"].startswith("Sink the required number of baskets")
+    assert by_room["Hoops"]["Simon Says"].startswith("Recreate the sequence of colours")
+    assert by_room["Scan"]["Spot"].startswith("Spot the difference.")
+
+
+async def test_game_data_sends_null_for_an_uncovered_gamemode(tmp_path):
+    """The document lags the site; an unknown gamemode renders with no tooltip."""
+    conn = _conn(tmp_path)
+    _seed_player(conn)
+    conn.execute(
+        "INSERT INTO location_games (location_id, room_id, room_name, room_order,"
+        " game_id, game_name, game_order, levels_json)"
+        " VALUES (72, 10, 'Hoops', 0, 1099, 'Brand New Mode', 0, '[0]')"
+    )
+
+    payload = await _game_data(conn, 72)
+    assert payload["rooms"][0]["games"][0]["description"] is None
+
+
 # ---------- dashboard: records held ----------
 # _seed_catalog's top scores are 1003/0 = 2062 and 1003/1 = 3046, and nothing
 # for 1001 or 2802 — the sparse shape a real location has.

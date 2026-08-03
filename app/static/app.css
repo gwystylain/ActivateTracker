@@ -141,6 +141,29 @@ table.level-table td.beat { font-variant-numeric: tabular-nums; }
 table.level-table td.beat.all { color: var(--ok); }
 table.level-table td.beat.none { color: var(--muted); }
 
+/* ---- /games: gamemode description bubble ---- */
+/* Only names the master document covers get the class, so the dotted underline
+   is itself the promise that there is something to read. */
+.mode-name {
+    text-decoration: underline dotted;
+    text-decoration-color: var(--muted);
+    text-underline-offset: 3px;
+}
+/* Cursor only where the name is its own control — inside a level-table game
+   row the click still expands the row, so it keeps that row's pointer. */
+.mode-name[tabindex] { cursor: help; }
+.mode-name:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+.mode-tip {
+    position: fixed; z-index: 20;
+    max-width: min(34rem, calc(100vw - 16px)); max-height: 60vh; overflow-y: auto;
+    padding: 10px 12px; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+    font-size: 0.88rem; line-height: 1.45;
+}
+.mode-tip[hidden] { display: none; }
+
 /* ---- collapsible cards (point farmer, never scored, records held) ---- */
 details.card-panel > summary { cursor: pointer; list-style-position: outside; }
 details.card-panel > summary > h2 { display: inline-block; margin: 0 0 0 4px; }

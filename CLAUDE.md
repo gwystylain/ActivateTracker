@@ -167,6 +167,34 @@ A short count also makes `needs_refresh` retry on the next poll.
 The per-room gamemode lists were identical at both locations probed, but `location_games` is keyed
 per location anyway so one location's layout can never corrupt another's.
 
+### Gamemode descriptions are static reference data, keyed by room
+The site publishes no description for a gamemode, so `app/game_descriptions.py` carries them
+transcribed from the community *Activate Games Master Document*. **Keyed by room name first**,
+because names repeat across rooms and need not be the same game — Mega Laser's Defuse wants 8
+rounds where Trench's wants "enough targets". `describe` falls back to a name-only index built at
+import, which deliberately **omits any name the document gives two different sets of rules for**
+(only `Defuse` today): no tooltip beats the wrong room's rules.
+
+Only **cooperative** gamemodes are listed, because those are what `roomGames` exposes — the
+competitive games have no levels and no leaderboard. Where a room runs a competitive game under
+the same name (Hoops' Barrage, Hide's Numbers), the co-op rules are the ones written down.
+The document covers rooms Activate has built anywhere, so it is a superset of any one location;
+conversely a gamemode it hasn't caught up with gets `description: null` and simply renders with no
+tooltip. Both directions are expected and neither is an error.
+
+`public._described` hangs the text on each game in `/api/game-data` rather than storing it with the
+catalog — it is keyed by name, not something the site told us, so it has no business in a table
+that mirrors upstream. Front-end: `games.js:modeName` marks up any *described* name with
+`.mode-name` (the dotted underline is therefore the promise that there is something to read), and
+one shared `position: fixed` bubble on `<body>` is refilled and moved. Fixed and body-level because
+the cards live inside `.table-wrap { overflow-x: auto }`, which would clip an in-cell popover, and
+because every row is destroyed on each render — hence delegated listeners and a `hideTip()` at the
+top of `render`/`renderLevels`. The name is a tab stop **only** in Point Farmer and Never scored;
+in the level breakdown the row is already `role="button"` and gets the `aria-describedby` itself,
+since nesting a second tab stop inside it would misdescribe the structure. The gamemode `<select>`
+uses a plain `title` instead: an open dropdown's options are drawn by the OS and nothing in the
+page can position against them.
+
 ### roomScores is per-location and sparse
 `roomScores` is the best score anyone *at that location* has posted, not a global best: coquitlam
 and langley disagree on every shared Hoops entry. It is also sparse — langley returns 38 rows

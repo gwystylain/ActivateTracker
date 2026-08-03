@@ -10,6 +10,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from .. import catalog as catalog_mod
+from .. import game_descriptions
 from .. import streak as streak_mod
 from ..auth import csrf_token_for, read_session
 
@@ -184,7 +185,7 @@ async def game_data(request: Request, location_id: int | None = None) -> JSONRes
             }
         )
 
-    rooms = catalog_mod.rooms_for_location(conn, location_id)
+    rooms = _described(catalog_mod.rooms_for_location(conn, location_id))
     top_scores = catalog_mod.top_scores_for_location(conn, location_id)
     status = catalog_mod.status_for_location(conn, location_id)
 
@@ -225,6 +226,19 @@ async def game_data(request: Request, location_id: int | None = None) -> JSONRes
 
 
 # ---------- helpers ----------
+
+def _described(rooms: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Hang the master document's rules on each gamemode, for the /games tooltips.
+
+    Attached here rather than stored with the catalog because it is static
+    reference text keyed by name, not something the site tells us. A gamemode
+    the document doesn't cover gets a null and renders with no tooltip.
+    """
+    for room in rooms:
+        for game in room["games"]:
+            game["description"] = game_descriptions.describe(room["name"], game["name"])
+    return rooms
+
 
 def _latest_snapshots(conn, location_id: int) -> list[Any]:
     """Newest snapshot per visible player at one location.
