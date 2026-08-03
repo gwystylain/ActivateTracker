@@ -49,14 +49,23 @@ takes the best (min) of any leaderboard rank, then `persist_snapshot` writes ONE
 `(player, location)` holding the combined values. Visit detection runs on combined totals.
 
 ### Chart-data semantics
-The plotted value (`top_score`) is the player's *highest* single-location score, not the sum
-across locations. `/api/chart-data` only emits a point when that value actually moved between
-polls (the first observation always counts), so a gain at a non-leading location leaves the
-line flat and drops out. Days where no tracked player changed drop out of the union x-axis
-entirely. Each point carries a `locations: {slug: score}` breakdown that forward-fills
-per-location values across days where only some locations were polled. The front-end
-(`app/static/app.js`) forward-fills the y values to every x label for tooltip continuity but
-uses `pointRadius` callbacks to hide dots on dates that aren't real change-days.
+Every point carries *both* plottable metrics — `top_score` (the player's highest single-location
+score) and `total_score` (the sum across locations) — because the chart's Best location / All
+locations toggle switches between them client-side with no refetch. `/api/chart-data` emits a day
+when *either* metric moved (the first observation always counts); days where neither moved drop
+out, which is what keeps the chart from growing a dot per poll on uneventful days. Each point also
+carries a `locations: {slug: score}` breakdown that forward-fills per-location values across days
+where only some locations were polled.
+
+Deciding which dates get a visible dot is the front-end's job (`app/static/app.js`), because it
+depends on the selected metric: `changeDates()` walks the emitted points and marks only those where
+the *chosen* metric changed. So in Best location mode, a day where only a non-leading location
+gained is a flat, dotless stretch — the point exists in the payload but is drawn at radius 0. The
+y values are forward-filled to every x label for tooltip continuity regardless. The selected metric
+persists in `localStorage` under `atrk.chartMetric`; both the read and the write are wrapped in
+try/catch because blocked storage throws on access and would otherwise take the whole chart down.
+Switching metrics also has to dismiss any open tooltip (`chart.tooltip.setActiveElements([], ...)`)
+— Chart.js otherwise keeps rendering the previous metric's number until the pointer moves.
 
 ### CSRF via body-replay middleware
 `security.CsrfMiddleware._peek_form` reads the request body once, parses it manually, then

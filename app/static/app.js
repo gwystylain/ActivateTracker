@@ -52,11 +52,37 @@
 
     const fmt = new Intl.NumberFormat();
 
-    const datasets = players.map((p, i) => {
-        // Dates this player's score actually moved. Used to decide which
-        // x positions get a visible dot — others are forward-filled for
-        // tooltip continuity but rendered with radius 0.
-        const changeDates = new Set(p.points.map(pt => pt.date));
+    // The two things a point can plot. Every payload point carries both, so
+    // switching between them is a re-read of data already in hand — no refetch.
+    const METRICS = {
+        top: {
+            key: 'top_score',
+            caption: "Each line is the player's highest single-location score.",
+        },
+        total: {
+            key: 'total_score',
+            caption: "Each line is the sum of the player's location scores.",
+        },
+    };
+    const STORAGE_KEY = 'atrk.chartMetric';
+
+    // Dates this player's chosen metric actually moved. Only these get a
+    // visible dot; the rest are forward-filled for tooltip continuity and
+    // drawn at radius 0. Derived per metric because the API emits a point when
+    // *either* metric moved — in "best location" mode, a day where only a
+    // non-leading location gained is a flat, dotless stretch of line.
+    function changeDates(points, key) {
+        const dates = new Set();
+        let prev = null;
+        for (const pt of points) {
+            if (prev === null || pt[key] !== prev) dates.add(pt.date);
+            prev = pt[key];
+        }
+        return dates;
+    }
+
+    function seriesFor(p, key) {
+        const changed = changeDates(p.points, key);
         const byDate = new Map(p.points.map(pt => [pt.date, pt]));
         let last = null;
         const data = labels.map(d => {
@@ -66,25 +92,36 @@
             // for dates before this player's first observation (e.g. a player
             // added after the graph already has history). spanGaps bridges it.
             return last
-                ? { x: d, y: last.top_score, locations: last.locations }
+                ? { x: d, y: last[key], locations: last.locations }
                 : { x: d, y: null };
         });
-        const pointRadius = labels.map(d => (changeDates.has(d) ? 3 : 0));
-        const pointHoverRadius = pointRadius.map(r => (r > 0 ? r + 2 : 0));
+        const pointRadius = labels.map(d => (changed.has(d) ? 3 : 0));
         return {
-            label: p.display_name,
             data,
-            borderColor: palette[i % palette.length],
-            backgroundColor: palette[i % palette.length] + '33',
-            tension: 0.15,
-            spanGaps: true,
             pointRadius,
-            pointHoverRadius,
-            parsing: false,
+            pointHoverRadius: pointRadius.map(r => (r > 0 ? r + 2 : 0)),
         };
-    });
+    }
 
-    new Chart(canvas, {
+    // Reading localStorage throws outright when storage is blocked, which would
+    // take the whole chart down with it — fall back to the default instead.
+    let stored = null;
+    try {
+        stored = localStorage.getItem(STORAGE_KEY);
+    } catch (e) { /* storage unavailable */ }
+    let metric = METRICS[stored] ? stored : 'top';
+
+    const datasets = players.map((p, i) => ({
+        label: p.display_name,
+        ...seriesFor(p, METRICS[metric].key),
+        borderColor: palette[i % palette.length],
+        backgroundColor: palette[i % palette.length] + '33',
+        tension: 0.15,
+        spanGaps: true,
+        parsing: false,
+    }));
+
+    const chart = new Chart(canvas, {
         type: 'line',
         data: { labels, datasets },
         options: {
@@ -108,8 +145,7 @@
                     intersect: false,
                     callbacks: {
                         label(ctx) {
-                            const top = ctx.parsed.y;
-                            return `${ctx.dataset.label}: ${fmt.format(top)}`;
+                            return `${ctx.dataset.label}: ${fmt.format(ctx.parsed.y)}`;
                         },
                         afterLabel(ctx) {
                             const locs = ctx.raw && ctx.raw.locations;
@@ -124,4 +160,40 @@
             },
         },
     });
+
+    const caption = document.getElementById('chartCaption');
+    const toggle = document.getElementById('metricToggle');
+
+    function applyMetric(next) {
+        metric = next;
+        const key = METRICS[metric].key;
+        players.forEach((p, i) => Object.assign(chart.data.datasets[i], seriesFor(p, key)));
+        // A tooltip left open across the switch keeps rendering the old
+        // metric's number until the pointer moves — dismiss it with the swap.
+        chart.setActiveElements([]);
+        chart.tooltip.setActiveElements([], { x: 0, y: 0 });
+        chart.update();
+        if (caption) {
+            caption.textContent =
+                METRICS[metric].caption + ' Hover a point for the per-location breakdown.';
+        }
+        if (toggle) {
+            toggle.querySelectorAll('button[data-metric]').forEach(b => {
+                b.setAttribute('aria-pressed', b.dataset.metric === metric ? 'true' : 'false');
+            });
+        }
+        // Safari in private mode throws on write; the toggle still works, the
+        // choice just won't survive a reload.
+        try {
+            localStorage.setItem(STORAGE_KEY, metric);
+        } catch (e) { /* non-fatal */ }
+    }
+
+    if (toggle) {
+        toggle.addEventListener('click', e => {
+            const btn = e.target.closest('button[data-metric]');
+            if (btn && btn.dataset.metric !== metric) applyMetric(btn.dataset.metric);
+        });
+    }
+    applyMetric(metric);  // sync caption + pressed state with the restored choice
 })();

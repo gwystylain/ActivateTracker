@@ -90,18 +90,22 @@ async def chart_data(request: Request) -> JSONResponse:
         pid = handle_to_player_id[handle]
         # Forward-fill per-location scores so each day's breakdown reflects all
         # locations the player has ever scored at, not just ones polled that day.
-        # The plotted value is the player's best single location, so only emit a
-        # point when that best value moves (or it's the first observation) —
-        # otherwise the chart accumulates a daily dot for every poll even on
-        # uneventful days. A gain at a non-leading location leaves the line flat
-        # and so drops out.
+        # Every point carries both metrics the front-end can plot — the best
+        # single location and the sum of all of them — because the chart toggles
+        # between them without re-fetching. A day is emitted when *either* moved
+        # (or it's the first observation); dropping the days where neither did
+        # keeps the chart from growing a dot per poll on uneventful days. Which
+        # of the two actually moved is left to the front-end to work out, since
+        # it can compare consecutive points itself.
         carry: dict[int, int] = {}
         points: list[dict[str, Any]] = []
         last_top: int | None = None
+        last_total: int | None = None
         for day in sorted(days):
             carry.update(days[day])
             top = max(carry.values())
-            if last_top is not None and top == last_top:
+            total = sum(carry.values())
+            if last_top is not None and top == last_top and total == last_total:
                 continue
             breakdown = {
                 loc_slug.get((pid, loc_id), f"loc-{loc_id}"): score
@@ -111,10 +115,12 @@ async def chart_data(request: Request) -> JSONResponse:
                 {
                     "date": day,
                     "top_score": top,
+                    "total_score": total,
                     "locations": breakdown,
                 }
             )
             last_top = top
+            last_total = total
         display = display_name_for.get(handle) or handle
         legend_label = display if display == handle else f"{display} ({handle})"
         payload.append(

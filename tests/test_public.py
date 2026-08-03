@@ -1,7 +1,9 @@
+import json
 from datetime import date
+from types import SimpleNamespace
 
 from app import db as db_mod
-from app.routes.public import _build_player_summaries
+from app.routes.public import _build_player_summaries, chart_data
 
 TODAY = date(2026, 8, 3)
 
@@ -75,6 +77,62 @@ def test_summary_without_snapshots_reports_none(tmp_path):
     assert p["levels_beat"] is None
     assert p["level_count"] is None
     assert all(loc["rank"] is None for loc in p["locations"])
+
+
+async def _chart(conn):
+    """chart_data only touches request.app.state.db, so a stub stands in."""
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=conn)))
+    return json.loads((await chart_data(request)).body)
+
+
+async def test_chart_emits_both_metrics_per_point(tmp_path):
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _snap(conn, pid, 72, "2026-08-01T00:00:00", rank=1, beat=1, total=100)
+    _snap(conn, pid, 38, "2026-08-01T00:00:00", rank=1, beat=1, total=500)
+
+    (player,) = (await _chart(conn))["players"]
+    (pt,) = player["points"]
+    assert pt["top_score"] == 500     # best single location
+    assert pt["total_score"] == 600   # sum across locations
+    assert pt["locations"] == {"langley": 100, "coquitlam": 500}
+
+
+async def test_chart_emits_day_when_only_the_sum_moves(tmp_path):
+    """A gain at a non-leading location leaves the max flat. The day must still
+    be emitted or the 'all locations' view would lose it entirely."""
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _snap(conn, pid, 72, "2026-08-01T00:00:00", rank=1, beat=1, total=100)
+    _snap(conn, pid, 38, "2026-08-01T00:00:00", rank=1, beat=1, total=500)
+    # Langley climbs but stays below coquitlam: max unchanged, sum up.
+    _snap(conn, pid, 72, "2026-08-02T00:00:00", rank=1, beat=1, total=300)
+
+    (player,) = (await _chart(conn))["players"]
+    assert [(p["date"], p["top_score"], p["total_score"]) for p in player["points"]] == [
+        ("2026-08-01", 500, 600),
+        ("2026-08-02", 500, 800),
+    ]
+
+
+async def test_chart_drops_days_where_neither_metric_moves(tmp_path):
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _snap(conn, pid, 72, "2026-08-01T00:00:00", rank=1, beat=1, total=100)
+    _snap(conn, pid, 72, "2026-08-02T00:00:00", rank=1, beat=1, total=100)  # no change
+    _snap(conn, pid, 72, "2026-08-03T00:00:00", rank=1, beat=1, total=180)
+
+    (player,) = (await _chart(conn))["players"]
+    assert [p["date"] for p in player["points"]] == ["2026-08-01", "2026-08-03"]
+
+
+async def test_chart_excludes_hidden_players(tmp_path):
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _snap(conn, pid, 72, "2026-08-01T00:00:00", rank=1, beat=1, total=100)
+    conn.execute("UPDATE players SET hidden = 1 WHERE id = ?", (pid,))
+
+    assert (await _chart(conn))["players"] == []
 
 
 def test_summary_ignores_locations_with_null_columns(tmp_path):

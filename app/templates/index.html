@@ -4,18 +4,26 @@
 <section class="card">
     <div class="card-header">
         <h1>Player scores over time</h1>
-        {% if logged_in %}
-            <form method="post" action="/admin/refresh" class="inline">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button type="submit">Refresh now</button>
-            </form>
-        {% endif %}
+        <div class="header-actions">
+            {% if players %}
+            <div class="segmented" id="metricToggle" role="group" aria-label="Score shown on the chart">
+                <button type="button" data-metric="top" aria-pressed="true">Best location</button>
+                <button type="button" data-metric="total" aria-pressed="false">All locations</button>
+            </div>
+            {% endif %}
+            {% if logged_in %}
+                <form method="post" action="/admin/refresh" class="inline">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit">Refresh now</button>
+                </form>
+            {% endif %}
+        </div>
     </div>
     {% if players %}
         <div class="chart-wrap">
             <canvas id="scoresChart" height="120"></canvas>
         </div>
-        <p class="muted small">Each line is the player's highest single-location score. Hover a point for the per-location breakdown.</p>
+        <p class="muted small" id="chartCaption">Hover a point for the per-location breakdown.</p>
     {% else %}
         <p class="muted">No tracked players yet. {% if logged_in %}Add one in <a href="/admin">Admin</a>.{% endif %}</p>
     {% endif %}
