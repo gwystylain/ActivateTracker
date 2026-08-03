@@ -66,7 +66,7 @@
             // for dates before this player's first observation (e.g. a player
             // added after the graph already has history). spanGaps bridges it.
             return last
-                ? { x: d, y: last.total_score, locations: last.locations }
+                ? { x: d, y: last.top_score, locations: last.locations }
                 : { x: d, y: null };
         });
         const pointRadius = labels.map(d => (changeDates.has(d) ? 3 : 0));
@@ -108,8 +108,8 @@
                     intersect: false,
                     callbacks: {
                         label(ctx) {
-                            const total = ctx.parsed.y;
-                            return `${ctx.dataset.label}: ${fmt.format(total)}`;
+                            const top = ctx.parsed.y;
+                            return `${ctx.dataset.label}: ${fmt.format(top)}`;
                         },
                         afterLabel(ctx) {
                             const locs = ctx.raw && ctx.raw.locations;

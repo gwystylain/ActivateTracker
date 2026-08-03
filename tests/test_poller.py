@@ -40,7 +40,56 @@ def _result(total: int) -> ScrapeResult:
         total_score=total,
         yearly_score=total // 2,
         scores=[{"gameId": 1, "levelId": 0, "highScore": total}],
+        levels_beat=1,
+        level_count=470,
     )
+
+
+def test_snapshot_persists_rank_and_levels_beat(tmp_path):
+    conn = _conn(tmp_path)
+    pid = _insert_player(conn)
+    persist_snapshot(conn, pid, _result(100))
+
+    row = conn.execute(
+        "SELECT player_rank, levels_beat, level_count FROM score_snapshots"
+    ).fetchone()
+    assert row["player_rank"] == 6      # the per-location rank, not profile rank
+    assert row["levels_beat"] == 1
+    assert row["level_count"] == 470
+
+
+def test_migrate_adds_levels_columns_to_existing_table(tmp_path):
+    """A pre-existing deployment's table lacks the new columns; init_schema's
+    PRAGMA-guarded ALTERs must add them without touching existing rows."""
+    conn = db_mod.connect(tmp_path / "old.db")
+    conn.executescript(
+        """
+        CREATE TABLE score_snapshots (
+            id              INTEGER PRIMARY KEY,
+            player_id       INTEGER NOT NULL,
+            location_id     INTEGER NOT NULL,
+            polled_at       TEXT NOT NULL,
+            total_score     INTEGER NOT NULL,
+            yearly_score    INTEGER NOT NULL,
+            player_rank     INTEGER,
+            yearly_rank     INTEGER,
+            stars           INTEGER,
+            coins           INTEGER,
+            raw_scores_json TEXT NOT NULL
+        );
+        INSERT INTO score_snapshots
+            (player_id, location_id, polled_at, total_score, yearly_score, raw_scores_json)
+        VALUES (1, 72, '2026-01-01T00:00:00', 500, 200, '[]');
+        """
+    )
+    db_mod.init_schema(conn)
+
+    row = conn.execute(
+        "SELECT total_score, levels_beat, level_count FROM score_snapshots"
+    ).fetchone()
+    assert row["total_score"] == 500     # existing row survives
+    assert row["levels_beat"] is None    # backfilled as NULL
+    assert row["level_count"] is None
 
 
 def test_first_snapshot_inserts_no_visit(tmp_path):

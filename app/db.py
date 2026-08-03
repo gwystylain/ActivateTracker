@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS score_snapshots (
     yearly_rank     INTEGER,
     stars           INTEGER,
     coins           INTEGER,
+    levels_beat     INTEGER,
+    level_count     INTEGER,
     raw_scores_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_snap_player_time
@@ -83,6 +85,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE players ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0"
         )
+
+    snap_cols = {r["name"] for r in conn.execute("PRAGMA table_info(score_snapshots)")}
+    for col in ("levels_beat", "level_count"):
+        if col not in snap_cols:
+            conn.execute(f"ALTER TABLE score_snapshots ADD COLUMN {col} INTEGER")
 
 
 @contextmanager

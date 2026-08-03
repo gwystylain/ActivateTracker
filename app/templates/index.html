@@ -15,6 +15,7 @@
         <div class="chart-wrap">
             <canvas id="scoresChart" height="120"></canvas>
         </div>
+        <p class="muted small">Each line is the player's highest single-location score. Hover a point for the per-location breakdown.</p>
     {% else %}
         <p class="muted">No tracked players yet. {% if logged_in %}Add one in <a href="/admin">Admin</a>.{% endif %}</p>
     {% endif %}
@@ -32,6 +33,8 @@
                 <th>Discount</th>
                 <th>Visits in last 30 days</th>
                 <th>Visits this year</th>
+                <th>Rank</th>
+                <th>Levels beat</th>
             </tr>
         </thead>
         <tbody>
@@ -47,6 +50,12 @@
                 <td>{{ p.discount_pct }}%</td>
                 <td>{{ p.visits_last_30_days }}</td>
                 <td>{{ p.visits_ytd }}</td>
+                <td>{% if p.rank is none %}&mdash;{% else %}#{{ p.rank }}{% endif %}</td>
+                <td>
+                    {%- if p.levels_beat is none %}&mdash;
+                    {%- else %}{{ p.levels_beat }}{% if p.level_count %} <span class="muted small">/ {{ p.level_count }}</span>{% endif %}
+                    {%- endif %}
+                </td>
             </tr>
             {% for loc in p.locations %}
             <tr class="loc-row" data-player="{{ p.id }}">
@@ -57,13 +66,19 @@
                 <td>{{ loc.discount_pct }}%</td>
                 <td>{{ loc.visits_last_30_days }}</td>
                 <td>{{ loc.visits_ytd }}</td>
+                <td>{% if loc.rank is none %}&mdash;{% else %}#{{ loc.rank }}{% endif %}</td>
+                <td>
+                    {%- if loc.levels_beat is none %}&mdash;
+                    {%- else %}{{ loc.levels_beat }}{% if loc.level_count %} <span class="muted small">/ {{ loc.level_count }}</span>{% endif %}
+                    {%- endif %}
+                </td>
             </tr>
             {% endfor %}
             {% endfor %}
         </tbody>
     </table>
     </div>
-    <p class="muted small">As of {{ today }} (UTC). Click a player to see a per-location breakdown. Discount stamp cards are per location, based on visits to that location in the last 30 days: 1 visit = 10% off, 2 = 15%, 3 = 20%, 4 or more = 25%. A player's headline discount is their best location.</p>
+    <p class="muted small">As of {{ today }} (UTC). Click a player to see a per-location breakdown. Discount stamp cards are per location, based on visits to that location in the last 30 days: 1 visit = 10% off, 2 = 15%, 3 = 20%, 4 or more = 25%. A player's headline discount is their best location, their headline rank is their best (lowest) location rank, and headline levels beat is their highest location.</p>
 </section>
 {% endif %}
 {% endblock %}

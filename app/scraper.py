@@ -46,6 +46,11 @@ class ScrapeResult:
     total_score: int
     yearly_score: int
     scores: list[dict[str, int]]  # [{gameId, levelId, highScore}, ...]
+    # Levels the player has posted a score on, and how many the location has in
+    # total. The page has no explicit "levels beat" field — one entry in
+    # `scores` with a non-zero highScore is one level beaten.
+    levels_beat: int = 0
+    level_count: int | None = None
 
 
 def extract_player_blob(html: str) -> dict[str, Any]:
@@ -105,7 +110,18 @@ def parse_html(html: str, *, handle: str, location_id: int, slug: str) -> Scrape
     blob = extract_player_blob(html)
     inner_player = blob.get("player") or {}
     player_loc = blob.get("playerLocation") or {}
+    location = blob.get("location") or {}
     scores = player_loc.get("scores") or []
+
+    clean_scores = [
+        {
+            "gameId": int(s.get("gameId", 0)),
+            "levelId": int(s.get("levelId", 0)),
+            "highScore": int(s.get("highScore", 0)),
+        }
+        for s in scores
+        if isinstance(s, dict)
+    ]
 
     return ScrapeResult(
         handle=handle,
@@ -120,15 +136,9 @@ def parse_html(html: str, *, handle: str, location_id: int, slug: str) -> Scrape
         standing=_int_or_none(player_loc.get("standing")),
         total_score=int(player_loc.get("totalScore") or 0),
         yearly_score=int(player_loc.get("yearlyScore") or 0),
-        scores=[
-            {
-                "gameId": int(s.get("gameId", 0)),
-                "levelId": int(s.get("levelId", 0)),
-                "highScore": int(s.get("highScore", 0)),
-            }
-            for s in scores
-            if isinstance(s, dict)
-        ],
+        scores=clean_scores,
+        levels_beat=sum(1 for s in clean_scores if s["highScore"] > 0),
+        level_count=_int_or_none(location.get("levelCount")),
     )
 
 
@@ -168,7 +178,9 @@ def combine_results(results: list[ScrapeResult]) -> ScrapeResult:
     the admin form as a comma-separated handle list). Totals are summed,
     leaderboard ranks take the best (lowest) value, and the per-game scores
     list is dropped — it isn't displayed and merging it across profiles
-    would be ambiguous.
+    would be ambiguous. `levels_beat` is the union of the (gameId, levelId)
+    pairs each profile has beaten, not a sum: a level both profiles cleared
+    is still one level beaten.
     """
     if not results:
         raise ValueError("combine_results requires at least one ScrapeResult")
@@ -185,6 +197,13 @@ def combine_results(results: list[ScrapeResult]) -> ScrapeResult:
         nonempty = [v for v in values if v is not None]
         return sum(nonempty) if nonempty else None
 
+    beaten = {
+        (s["gameId"], s["levelId"])
+        for r in results
+        for s in r.scores
+        if s["highScore"] > 0
+    }
+
     return ScrapeResult(
         handle=",".join(r.handle for r in results),
         location_id=base.location_id,
@@ -199,4 +218,6 @@ def combine_results(results: list[ScrapeResult]) -> ScrapeResult:
         total_score=sum(r.total_score for r in results),
         yearly_score=sum(r.yearly_score for r in results),
         scores=[],
+        levels_beat=len(beaten),
+        level_count=base.level_count,
     )

@@ -46,6 +46,10 @@ def test_parse_html_returns_scrape_result():
     assert r.yearly_rank == 2932
     assert r.standing == 287
     assert len(r.scores) > 30  # the real fixture has many
+    # Levels beat is derived: one scores entry with a non-zero highScore per
+    # level. The fixture's 40 entries are all non-zero.
+    assert r.levels_beat == 40
+    assert r.level_count == 470  # location.levelCount
 
 
 def test_extract_raises_on_missing_blob():
@@ -89,6 +93,37 @@ def test_combine_results_sums_totals_and_takes_best_ranks():
 def test_combine_results_passthrough_for_single():
     a = _r("solo", total=500)
     assert combine_results([a]) is a
+
+
+def test_levels_beat_ignores_zero_scores():
+    fake = (
+        '"player":{"player":{"playerName":"x","rank":1},'
+        '"location":{"levelCount":12},'
+        '"playerLocation":{"locationId":9,"playerName":"x","totalScore":5,'
+        '"yearlyScore":5,"scores":['
+        '{"gameId":1,"levelId":0,"highScore":100},'
+        '{"gameId":1,"levelId":1,"highScore":0},'
+        '{"gameId":2,"levelId":0,"highScore":7}]},'
+        '"locationId":"9","locationName":"x"}'
+    )
+    r = parse_html(fake, handle="x", location_id=9, slug="x")
+    assert r.levels_beat == 2   # the highScore 0 entry doesn't count
+    assert r.level_count == 12
+
+
+def test_combine_results_unions_levels_beat_across_handles():
+    # Both profiles beat game 1 level 0 — it counts once, not twice.
+    a = _r("stebb", total=10, levels_beat=2, level_count=470, scores=[
+        {"gameId": 1, "levelId": 0, "highScore": 50},
+        {"gameId": 1, "levelId": 1, "highScore": 60},
+    ])
+    b = _r("stevo", total=20, levels_beat=2, level_count=470, scores=[
+        {"gameId": 1, "levelId": 0, "highScore": 90},
+        {"gameId": 2, "levelId": 0, "highScore": 30},
+    ])
+    c = combine_results([a, b])
+    assert c.levels_beat == 3
+    assert c.level_count == 470
 
 
 def test_combine_results_handles_partial_nones():

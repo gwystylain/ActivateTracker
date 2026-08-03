@@ -90,16 +90,18 @@ async def chart_data(request: Request) -> JSONResponse:
         pid = handle_to_player_id[handle]
         # Forward-fill per-location scores so each day's breakdown reflects all
         # locations the player has ever scored at, not just ones polled that day.
-        # Only emit a point when total_score actually moved (or it's the first
-        # observation) — otherwise the chart accumulates a daily dot for every
-        # poll even on uneventful days.
+        # The plotted value is the player's best single location, so only emit a
+        # point when that best value moves (or it's the first observation) —
+        # otherwise the chart accumulates a daily dot for every poll even on
+        # uneventful days. A gain at a non-leading location leaves the line flat
+        # and so drops out.
         carry: dict[int, int] = {}
         points: list[dict[str, Any]] = []
-        last_total: int | None = None
+        last_top: int | None = None
         for day in sorted(days):
             carry.update(days[day])
-            total = sum(carry.values())
-            if last_total is not None and total == last_total:
+            top = max(carry.values())
+            if last_top is not None and top == last_top:
                 continue
             breakdown = {
                 loc_slug.get((pid, loc_id), f"loc-{loc_id}"): score
@@ -108,11 +110,11 @@ async def chart_data(request: Request) -> JSONResponse:
             points.append(
                 {
                     "date": day,
-                    "total_score": total,
+                    "top_score": top,
                     "locations": breakdown,
                 }
             )
-            last_total = total
+            last_top = top
         display = display_name_for.get(handle) or handle
         legend_label = display if display == handle else f"{display} ({handle})"
         payload.append(
@@ -166,6 +168,20 @@ def _build_player_summaries(conn, *, today: date) -> list[dict[str, Any]]:
                 date.fromisoformat(r["visit_date"])
             )
 
+        # Latest snapshot per location carries the leaderboard rank and levels
+        # beaten. Ordered ascending so the last write per location wins.
+        latest_snap: dict[int, Any] = {}
+        for r in conn.execute(
+            """
+            SELECT location_id, player_rank, levels_beat, level_count
+            FROM score_snapshots
+            WHERE player_id = ?
+            ORDER BY location_id, polled_at
+            """,
+            (p["id"],),
+        ).fetchall():
+            latest_snap[r["location_id"]] = r
+
         baseline = (
             date.fromisoformat(p["initial_streak_set_at"])
             if p["initial_streak_set_at"]
@@ -188,6 +204,7 @@ def _build_player_summaries(conn, *, today: date) -> list[dict[str, Any]]:
         locations: list[dict[str, Any]] = []
         for lid in loc_ids:
             ls = streak_mod.summarize(visit_dates_by_loc.get(lid, []), **summary_kwargs)
+            snap = latest_snap.get(lid)
             locations.append(
                 {
                     "name": loc_name.get(lid, f"loc-{lid}"),
@@ -198,11 +215,20 @@ def _build_player_summaries(conn, *, today: date) -> list[dict[str, Any]]:
                     else None,
                     "visits_last_30_days": ls.visits_last_30_days,
                     "visits_ytd": ls.visits_ytd,
+                    "rank": snap["player_rank"] if snap else None,
+                    "levels_beat": snap["levels_beat"] if snap else None,
+                    "level_count": snap["level_count"] if snap else None,
                 }
             )
         # Highest discount first, then alphabetical; headline discount is the best.
         locations.sort(key=lambda l: (-l["discount_pct"], l["name"]))
         discount_pct = max((l["discount_pct"] for l in locations), default=0)
+        # Headline rank is the best (lowest) across locations; headline levels
+        # beat is the highest, carrying that location's level total with it.
+        ranks = [l["rank"] for l in locations if l["rank"] is not None]
+        best_rank = min(ranks) if ranks else None
+        beat_locs = [l for l in locations if l["levels_beat"] is not None]
+        top_beat = max(beat_locs, key=lambda l: l["levels_beat"], default=None)
         out.append(
             {
                 "id": p["id"],
@@ -210,6 +236,9 @@ def _build_player_summaries(conn, *, today: date) -> list[dict[str, Any]]:
                 "display_name": p["display_name"] or p["handle"],
                 "discount_pct": discount_pct,
                 "locations": locations,
+                "rank": best_rank,
+                "levels_beat": top_beat["levels_beat"] if top_beat else None,
+                "level_count": top_beat["level_count"] if top_beat else None,
                 "days_since_last_visit": summary.days_since_last_visit,
                 "last_visit_date": summary.last_visit_date.isoformat()
                 if summary.last_visit_date

@@ -146,8 +146,9 @@ def persist_snapshot(
             """
             INSERT INTO score_snapshots
                 (player_id, location_id, polled_at, total_score, yearly_score,
-                 player_rank, yearly_rank, stars, coins, raw_scores_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 player_rank, yearly_rank, stars, coins, levels_beat, level_count,
+                 raw_scores_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 player_id,
@@ -159,6 +160,8 @@ def persist_snapshot(
                 result.yearly_rank,
                 result.stars,
                 result.coins,
+                result.levels_beat,
+                result.level_count,
                 json.dumps(result.scores),
             ),
         )

@@ -49,12 +49,14 @@ takes the best (min) of any leaderboard rank, then `persist_snapshot` writes ONE
 `(player, location)` holding the combined values. Visit detection runs on combined totals.
 
 ### Chart-data semantics
-`/api/chart-data` only emits a point when a player's `total_score` actually moved between
-polls (the first observation always counts). Days where no tracked player changed drop out
-of the union x-axis entirely. Each point carries a `locations: {slug: score}` breakdown that
-forward-fills per-location values across days where only some locations were polled. The
-front-end (`app/static/app.js`) forward-fills the y values to every x label for tooltip
-continuity but uses `pointRadius` callbacks to hide dots on dates that aren't real change-days.
+The plotted value (`top_score`) is the player's *highest* single-location score, not the sum
+across locations. `/api/chart-data` only emits a point when that value actually moved between
+polls (the first observation always counts), so a gain at a non-leading location leaves the
+line flat and drops out. Days where no tracked player changed drop out of the union x-axis
+entirely. Each point carries a `locations: {slug: score}` breakdown that forward-fills
+per-location values across days where only some locations were polled. The front-end
+(`app/static/app.js`) forward-fills the y values to every x label for tooltip continuity but
+uses `pointRadius` callbacks to hide dots on dates that aren't real change-days.
 
 ### CSRF via body-replay middleware
 `security.CsrfMiddleware._peek_form` reads the request body once, parses it manually, then
@@ -88,6 +90,25 @@ fixture and the anchor regex are the canary.
 
 ### Schema is bootstrapped, not migrated
 `db.init_schema` runs `CREATE TABLE IF NOT EXISTS ...` on every startup. There is no migration
-framework. Adding columns to existing tables would require manual `ALTER TABLE` in `init_schema`
-that's idempotent (e.g. checking `PRAGMA table_info`). Existing deployments' SQLite at
+framework. Adding a column to an existing table means adding it to `SCHEMA` *and* to `db._migrate`
+as a `PRAGMA table_info`-guarded `ALTER TABLE` — `CREATE TABLE IF NOT EXISTS` is a no-op on a
+deployment whose table already exists, so new columns only reach it through `_migrate`. Backfilled
+columns are NULL on old rows, so readers must tolerate None. Existing deployments' SQLite at
 `/data/tracker.db` survives container rebuilds via the compose volume.
+
+### Rank and levels-beat come from the same page as the score
+`score_snapshots.player_rank` is the *per-location* leaderboard rank (`playerLocation.playerRank`),
+not the cross-location profile rank (`player.rank`, which is scraped as `ScrapeResult.player_rank`
+but not persisted). The hydration blob has no "levels beat" field: `scraper.parse_html` derives it
+as the count of `playerLocation.scores` entries with a non-zero `highScore`, alongside
+`location.levelCount` as the denominator. That derivation is not a guess: the page also *renders*
+the answer as `Levels Beat: 106/490` in presentational markup, and the derived pair matches it
+exactly (checked live at coquitlam 106/490 and langley 49/510). The JSON blob is the more stable
+anchor than the Tailwind-classed `<p>`, so we derive rather than scrape the rendered string — but
+that string is the ground truth to re-check against if the number ever looks wrong. Note the
+committed langley fixture is an old capture (40/470), so fixture numbers lag live ones. Across
+multiple handles
+`combine_results` takes the *union* of beaten `(gameId, levelId)` pairs rather than summing, or a
+level both profiles cleared would count twice. On the dashboard the headline row shows the best
+(lowest) rank and the highest levels-beat across the player's locations, with the per-location
+values in the expandable rows.
