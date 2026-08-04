@@ -41,11 +41,20 @@ class ScrapeResult:
     location_id: int
     location_slug: str
     player_name: str | None      # canonical case from the site
-    player_rank: int | None      # the player's profile rank (cross-location)
+    # `player.rank` — a property of the profile, not of any location: every
+    # location's page returns the same value for a given handle (verified live,
+    # langley and coquitlam both 4). Parsed for completeness; not what the
+    # dashboard shows — see `standing`.
+    profile_rank: int | None
     stars: int | None
     coins: int | None
+    # `playerLocation.playerRank` — the number in the site's own page header,
+    # next to the Rank_N-M badge. Also not the leaderboard position.
     location_player_rank: int | None
     yearly_rank: int | None
+    # `playerLocation.standing` — what the page renders as
+    # "Your Leaderboard Position: #138". Per location: on one live pull
+    # coquitlam read 138 and langley 321 for the same handle.
     standing: int | None
     total_score: int
     yearly_score: int
@@ -192,7 +201,7 @@ def parse_html(html: str, *, handle: str, location_id: int, slug: str) -> Scrape
         location_id=location_id,
         location_slug=slug,
         player_name=inner_player.get("playerName"),
-        player_rank=_int_or_none(inner_player.get("rank")),
+        profile_rank=_int_or_none(inner_player.get("rank")),
         stars=_int_or_none(inner_player.get("stars")),
         coins=_int_or_none(inner_player.get("coins")),
         location_player_rank=_int_or_none(player_loc.get("playerRank")),
@@ -345,6 +354,12 @@ def combine_results(results: list[ScrapeResult]) -> ScrapeResult:
     better highScore, so a level cleared under either profile reads as beaten
     at that player's best score on the /games page. `levels_beat` counts the
     merged entries, so a level both profiles cleared is still one level beaten.
+
+    Every rank-shaped field — `standing` (the displayed leaderboard position),
+    `location_player_rank`, `profile_rank` — takes the best (lowest) across the
+    handles. Each candidate is a number one of the player's own profiles
+    reported; the combine picks among them and never averages or otherwise
+    invents one.
     """
     if not results:
         raise ValueError("combine_results requires at least one ScrapeResult")
@@ -377,7 +392,7 @@ def combine_results(results: list[ScrapeResult]) -> ScrapeResult:
         location_id=base.location_id,
         location_slug=base.location_slug,
         player_name=results[0].player_name,
-        player_rank=_best([r.player_rank for r in results]),
+        profile_rank=_best([r.profile_rank for r in results]),
         stars=_sum([r.stars for r in results]),
         coins=_sum([r.coins for r in results]),
         location_player_rank=_best([r.location_player_rank for r in results]),

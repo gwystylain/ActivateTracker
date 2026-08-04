@@ -109,10 +109,30 @@ the `SCHEMA` entry (that's why `location_games` / `location_top_scores` / `locat
 no `_migrate` clause). Existing deployments' SQLite at `/data/tracker.db` survives container
 rebuilds via the compose volume.
 
-### Rank and levels-beat come from the same page as the score
-`score_snapshots.player_rank` is the *per-location* leaderboard rank (`playerLocation.playerRank`),
-not the cross-location profile rank (`player.rank`, which is scraped as `ScrapeResult.player_rank`
-but not persisted). The hydration blob has no "levels beat" field: `scraper.parse_html` derives it
+### Three rank-shaped numbers; the dashboard shows the one the page names
+The page carries three, and they are *different numbers on the same page* — mixing them up is the
+easiest mistake here, so all three are parsed and named after what they are:
+
+- `playerLocation.standing` → `ScrapeResult.standing` → `score_snapshots.leaderboard_position`.
+  The page states it outright next to the score: `Your Leaderboard Position: #138`. **This is what
+  the dashboard's Leaderboard position column shows.** Per location — one live pull read 138 at
+  coquitlam and 321 at langley for the same handle.
+- `playerLocation.playerRank` → `ScrapeResult.location_player_rank` → `score_snapshots.player_rank`.
+  The number in the site's own "We're Impressed" header, inside the `Rank_10-19.png` badge (19 and 8
+  for those same two pulls). Still persisted because it has history, but not displayed — the
+  dashboard used to show this in a column labelled Rank, which is why the column read #19 while the
+  page said #138.
+- `player.rank` → `ScrapeResult.profile_rank`. A property of the profile, not of any location:
+  every location's page returns the same value (both pages above said 4). Parsed, not persisted.
+
+None of these is computed from the others, and none can be. The headline row shows the best
+(lowest) `leaderboard_position` across the player's locations, the same rule as the headline
+discount and levels beat — a pick among values the site reported, not a blend. NULL means "not
+observed" (a snapshot predating the column) and renders as an em dash; there is no fallback to a
+different field. `combine_results` takes the best `standing` across a multi-handle player's
+profiles, which likewise picks between two queried numbers.
+
+The hydration blob has no "levels beat" field: `scraper.parse_html` derives it
 as the count of `playerLocation.scores` entries with a non-zero `highScore`, alongside
 `location.levelCount` as the denominator. That derivation is not a guess: the page also *renders*
 the answer as `Levels Beat: 106/490` in presentational markup, and the derived pair matches it
@@ -122,9 +142,8 @@ that string is the ground truth to re-check against if the number ever looks wro
 committed langley fixture is an old capture (40/470), so fixture numbers lag live ones. Across
 multiple handles `combine_results` merges the `scores` lists by `(gameId, levelId)` keeping the
 better `highScore` and counts *that*, rather than summing — a level both profiles cleared would
-otherwise count twice. On the dashboard the headline row shows the best (lowest) rank and the
-highest levels-beat across the player's locations, with the per-location values in the expandable
-rows.
+otherwise count twice. On the dashboard the headline row shows the highest levels-beat across the
+player's locations, with the per-location values (and per-location ranks) in the expandable rows.
 
 ### /games: per-level breakdown and Point Farmer
 Terminology differs from the site's. What the UI calls a **Game** is the site's *room* (Hoops);

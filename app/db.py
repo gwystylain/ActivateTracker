@@ -30,7 +30,10 @@ CREATE TABLE IF NOT EXISTS score_snapshots (
     polled_at       TEXT NOT NULL,
     total_score     INTEGER NOT NULL,
     yearly_score    INTEGER NOT NULL,
-    player_rank     INTEGER,
+    player_rank     INTEGER,   -- playerLocation.playerRank, the header badge
+    -- playerLocation.standing — what the page calls "Your Leaderboard Position".
+    -- This is the one the dashboard shows.
+    leaderboard_position INTEGER,
     yearly_rank     INTEGER,
     stars           INTEGER,
     coins           INTEGER,
@@ -120,7 +123,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
         )
 
     snap_cols = {r["name"] for r in conn.execute("PRAGMA table_info(score_snapshots)")}
-    for col in ("levels_beat", "level_count"):
+    for col in ("levels_beat", "level_count", "leaderboard_position"):
         if col not in snap_cols:
             conn.execute(f"ALTER TABLE score_snapshots ADD COLUMN {col} INTEGER")
 

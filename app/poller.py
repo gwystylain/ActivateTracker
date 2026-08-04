@@ -221,9 +221,9 @@ def persist_snapshot(
             """
             INSERT INTO score_snapshots
                 (player_id, location_id, polled_at, total_score, yearly_score,
-                 player_rank, yearly_rank, stars, coins, levels_beat, level_count,
-                 raw_scores_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 player_rank, leaderboard_position, yearly_rank, stars, coins,
+                 levels_beat, level_count, raw_scores_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 player_id,
@@ -231,7 +231,12 @@ def persist_snapshot(
                 polled_at,
                 result.total_score,
                 result.yearly_score,
+                # Two different numbers, both per location: the page-header
+                # badge rank, and the leaderboard position the page states
+                # outright ("Your Leaderboard Position: #138"). The dashboard
+                # shows the second; the first is kept because it has history.
                 result.location_player_rank,
+                result.standing,
                 result.yearly_rank,
                 result.stars,
                 result.coins,

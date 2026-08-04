@@ -42,7 +42,9 @@ def test_parse_html_returns_scrape_result():
     assert r.yearly_score == 80349
     assert r.location_id == 72
     assert r.location_slug == "langley"
-    assert r.player_rank == 3
+    # Two distinct ranks off the same page: the profile's own (`player.rank`)
+    # and this location's leaderboard position (`playerLocation.playerRank`).
+    assert r.profile_rank == 3
     assert r.stars == 355
     assert r.coins == 145
     assert r.location_player_rank == 6
@@ -63,7 +65,7 @@ def test_extract_raises_on_missing_blob():
 def _r(handle, total, yearly=0, **kw):
     defaults = dict(
         handle=handle, location_id=72, location_slug="langley", player_name=handle,
-        player_rank=None, stars=None, coins=None, location_player_rank=None,
+        profile_rank=None, stars=None, coins=None, location_player_rank=None,
         yearly_rank=None, standing=None, total_score=total, yearly_score=yearly,
         scores=[],
     )
@@ -73,9 +75,9 @@ def _r(handle, total, yearly=0, **kw):
 
 def test_combine_results_sums_totals_and_takes_best_ranks():
     a = _r("stebb", total=1000, yearly=400, stars=10, coins=5,
-           location_player_rank=20, yearly_rank=300, standing=100, player_rank=4)
+           location_player_rank=20, yearly_rank=300, standing=100, profile_rank=4)
     b = _r("stevo", total=2000, yearly=800, stars=15, coins=8,
-           location_player_rank=8,  yearly_rank=200, standing=50,  player_rank=3)
+           location_player_rank=8,  yearly_rank=200, standing=50,  profile_rank=3)
     c = combine_results([a, b])
 
     assert c.total_score == 3000
@@ -86,7 +88,9 @@ def test_combine_results_sums_totals_and_takes_best_ranks():
     assert c.location_player_rank == 8
     assert c.yearly_rank == 200
     assert c.standing == 50
-    assert c.player_rank == 3
+    # Two handles are two real profiles, each with its own queried rank — the
+    # better one wins rather than anything being derived from the pair.
+    assert c.profile_rank == 3
     # Combined handle is the comma-joined input
     assert c.handle == "stebb,stevo"
     # Neither input carried per-level scores, so there's nothing to merge.

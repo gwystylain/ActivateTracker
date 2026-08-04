@@ -33,7 +33,7 @@ def _result(total: int) -> ScrapeResult:
         location_id=72,
         location_slug="langley",
         player_name="GMEbagholder",
-        player_rank=3,
+        profile_rank=3,
         stars=355,
         coins=145,
         location_player_rank=6,
@@ -53,14 +53,16 @@ def test_snapshot_persists_rank_and_levels_beat(tmp_path):
     persist_snapshot(conn, pid, _result(100))
 
     row = conn.execute(
-        "SELECT player_rank, levels_beat, level_count FROM score_snapshots"
+        "SELECT player_rank, leaderboard_position, levels_beat, level_count"
+        " FROM score_snapshots"
     ).fetchone()
-    assert row["player_rank"] == 6      # the per-location rank, not profile rank
+    assert row["player_rank"] == 6              # the page-header badge rank
+    assert row["leaderboard_position"] == 287   # "Your Leaderboard Position"
     assert row["levels_beat"] == 1
     assert row["level_count"] == 470
 
 
-def test_migrate_adds_levels_columns_to_existing_table(tmp_path):
+def test_migrate_adds_new_columns_to_existing_table(tmp_path):
     """A pre-existing deployment's table lacks the new columns; init_schema's
     PRAGMA-guarded ALTERs must add them without touching existing rows."""
     conn = db_mod.connect(tmp_path / "old.db")
@@ -87,11 +89,13 @@ def test_migrate_adds_levels_columns_to_existing_table(tmp_path):
     db_mod.init_schema(conn)
 
     row = conn.execute(
-        "SELECT total_score, levels_beat, level_count FROM score_snapshots"
+        "SELECT total_score, levels_beat, level_count, leaderboard_position"
+        " FROM score_snapshots"
     ).fetchone()
-    assert row["total_score"] == 500     # existing row survives
-    assert row["levels_beat"] is None    # backfilled as NULL
+    assert row["total_score"] == 500              # existing row survives
+    assert row["levels_beat"] is None             # backfilled as NULL
     assert row["level_count"] is None
+    assert row["leaderboard_position"] is None
 
 
 def test_first_snapshot_inserts_no_visit(tmp_path):
