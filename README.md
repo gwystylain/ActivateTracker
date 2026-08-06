@@ -1,6 +1,6 @@
 # activateTracker
 
-Self-hosted web app that tracks Activate ([playactivate.com](https://playactivate.com))
+Landon is n00b. Self-hosted web app that tracks Activate ([playactivate.com](https://playactivate.com))
 player scores over time. Public landing page shows a graph plus per-player
 streak / discount / visit summary; password-protected admin section adds and
 removes tracked players.
