@@ -305,23 +305,28 @@ async def test_game_data_with_no_players_at_all(tmp_path):
     assert payload["players"] == []
 
 
-async def test_game_data_carries_each_gamemodes_description(tmp_path):
-    """The /games tooltips: static text keyed by room and gamemode name."""
+async def test_game_data_carries_each_gamemodes_reference_data(tmp_path):
+    """Master document text and figures, keyed by room and gamemode name."""
     conn = _conn(tmp_path)
     _seed_player(conn)
     _seed_catalog(conn)
 
     payload = await _game_data(conn, 72)
 
-    by_room = {r["name"]: {g["name"]: g["description"] for g in r["games"]}
-               for r in payload["rooms"]}
-    assert by_room["Hoops"]["Barrage"].startswith("Sink the required number of baskets")
-    assert by_room["Hoops"]["Simon Says"].startswith("Recreate the sequence of colours")
-    assert by_room["Scan"]["Spot"].startswith("Spot the difference.")
+    by_room = {r["name"]: {g["name"]: g for g in r["games"]} for r in payload["rooms"]}
+    hoops = by_room["Hoops"]
+    assert hoops["Barrage"]["description"].startswith("Sink the required number of baskets")
+    assert hoops["Simon Says"]["description"].startswith("Recreate the sequence of colours")
+    assert by_room["Scan"]["Spot"]["description"].startswith("Spot the difference.")
+
+    # Barrage plays best as a pair, Simon Says as a five.
+    assert hoops["Barrage"]["optimal_players"] == 2
+    assert hoops["Simon Says"]["optimal_players"] == 5
+    assert hoops["Barrage"]["optimal_disputed"] is False
 
 
-async def test_game_data_sends_null_for_an_uncovered_gamemode(tmp_path):
-    """The document lags the site; an unknown gamemode renders with no tooltip."""
+async def test_game_data_sends_nulls_for_an_uncovered_gamemode(tmp_path):
+    """The document lags the site; an unknown gamemode renders with neither."""
     conn = _conn(tmp_path)
     _seed_player(conn)
     conn.execute(
@@ -331,7 +336,10 @@ async def test_game_data_sends_null_for_an_uncovered_gamemode(tmp_path):
     )
 
     payload = await _game_data(conn, 72)
-    assert payload["rooms"][0]["games"][0]["description"] is None
+    game = payload["rooms"][0]["games"][0]
+    assert game["description"] is None
+    assert game["optimal_players"] is None
+    assert game["optimal_disputed"] is False
 
 
 # ---------- dashboard: records held ----------

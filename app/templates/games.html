@@ -39,6 +39,11 @@
     </div>
 
     <fieldset class="players-filter">
+        <legend>Optimal players</legend>
+        <div id="optimalFilter" class="player-checks"></div>
+    </fieldset>
+
+    <fieldset class="players-filter">
         <legend>Players</legend>
         <div id="playerFilter" class="player-checks"></div>
     </fieldset>
@@ -62,6 +67,7 @@
                         <th>#</th>
                         <th>Game</th>
                         <th>Gamemode</th>
+                        <th>Optimal players</th>
                         <th>Open levels</th>
                         <th>Points on the table</th>
                     </tr>
@@ -87,6 +93,7 @@
                     <tr>
                         <th>Game</th>
                         <th>Gamemode</th>
+                        <th>Optimal players</th>
                         <th>Never scored</th>
                         <th>Levels</th>
                     </tr>
@@ -108,7 +115,10 @@
     </div>
     <p class="muted small">
         Click a gamemode to see its levels, or hover an underlined name anywhere on this
-        page for how that gamemode is played. <strong>Top score</strong> is the best score
+        page for how that gamemode is played. <strong>Optimal players</strong> is the
+        community master document's figure for the gamemode; a starred number is one it
+        records without a clear consensus, and a dash is one it hasn't settled at all.
+        <strong>Top score</strong> is the best score
         anyone at this location has posted; a dash means nobody there has scored it yet.
         A crowned score is one a player holds — every one of them is listed under
         <a href="/">Records held</a> on the dashboard.

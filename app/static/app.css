@@ -141,6 +141,13 @@ table.level-table td.beat { font-variant-numeric: tabular-nums; }
 table.level-table td.beat.all { color: var(--ok); }
 table.level-table td.beat.none { color: var(--muted); }
 
+/* ---- /games: optimal player count ---- */
+td.optimal { font-variant-numeric: tabular-nums; }
+/* The document's `**`: a number is recorded but not agreed on, so it is shown
+   a shade back from the firm ones. */
+td.optimal.disputed { color: var(--muted); cursor: help; }
+td.optimal .flag { margin-left: 1px; }
+
 /* ---- /games: gamemode description bubble ---- */
 /* Only names the master document covers get the class, so the dotted underline
    is itself the promise that there is something to read. */

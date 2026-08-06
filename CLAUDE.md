@@ -186,22 +186,31 @@ A short count also makes `needs_refresh` retry on the next poll.
 The per-room gamemode lists were identical at both locations probed, but `location_games` is keyed
 per location anyway so one location's layout can never corrupt another's.
 
-### Gamemode descriptions are static reference data, keyed by room
-The site publishes no description for a gamemode, so `app/game_descriptions.py` carries them
-transcribed from the community *Activate Games Master Document*. **Keyed by room name first**,
-because names repeat across rooms and need not be the same game — Mega Laser's Defuse wants 8
-rounds where Trench's wants "enough targets". `describe` falls back to a name-only index built at
-import, which deliberately **omits any name the document gives two different sets of rules for**
-(only `Defuse` today): no tooltip beats the wrong room's rules.
+### Master document data is static reference, keyed by room
+The site publishes neither a description for a gamemode nor how many players it plays best with,
+so `app/master_document.py` carries both, transcribed from the community *Activate Games Master
+Document*. **Keyed by room name first**, because names repeat across rooms and need not be the
+same game — Mega Laser's Defuse wants 8 rounds where Trench's wants "enough targets". `lookup`
+falls back to a name-only index built at import, merged **one field at a time**: a field two rooms
+disagree about is dropped rather than answered with the wrong room's value. Today that is all of
+`Defuse` (different rules) and only the *count* fields of `Zap` (3 at Mega Laser, unrecorded at
+Trench) — Zap's rules are identical, so those still resolve.
 
 Only **cooperative** gamemodes are listed, because those are what `roomGames` exposes — the
 competitive games have no levels and no leaderboard. Where a room runs a competitive game under
 the same name (Hoops' Barrage, Hide's Numbers), the co-op rules are the ones written down.
 The document covers rooms Activate has built anywhere, so it is a superset of any one location;
-conversely a gamemode it hasn't caught up with gets `description: null` and simply renders with no
-tooltip. Both directions are expected and neither is an error.
+conversely a gamemode it hasn't caught up with gets nulls and simply renders with no tooltip and
+a dash for its player count. Both directions are expected and neither is an error.
 
-`public._described` hangs the text on each game in `/api/game-data` rather than storing it with the
+`optimal_players` is the document's "Optimal # of players" column, and it is **not populated for
+all 76** — 12 cells are blank and Grip's Firewall holds a `?`, so 13 come through as None and the
+page shows a dash. The document's `**` marker ("no clear consensus") survives as
+`optimal_disputed`, rendered as a starred, muted number: still shown, because a soft answer beats
+none, but visibly softer than the other 53. The filter treats a disputed 5 as a 5 — it is the same
+answer, just less settled.
+
+`public._described` hangs the data on each game in `/api/game-data` rather than storing it with the
 catalog — it is keyed by name, not something the site told us, so it has no business in a table
 that mirrors upstream. Front-end: `games.js:modeName` marks up any *described* name with
 `.mode-name` (the dotted underline is therefore the promise that there is something to read), and
@@ -213,6 +222,16 @@ in the level breakdown the row is already `role="button"` and gets the `aria-des
 since nesting a second tab stop inside it would misdescribe the structure. The gamemode `<select>`
 uses a plain `title` instead: an open dropdown's options are drawn by the OS and nothing in the
 page can position against them.
+
+The **Optimal players** column appears in all three cards, and its tick-box filter lives in
+`visibleGames()` so it narrows all three at once — the same reach as the Game and Gamemode selects
+(the older "Only gamemodes with a no score" box is applied inside `renderLevels` and so affects
+only the level breakdown). Ticking nothing constrains nothing, the way a facet filter normally
+behaves. The choices are hard-coded rather than derived from the payload, so the boxes don't
+shuffle when a location happens to catalogue no 4-player gamemode, and **Not recorded** is one of
+them: without it, ticking any box would hide the 13 unrecorded gamemodes with no way back. In the
+level breakdown the expanded level rows leave the cell empty — the count belongs to the gamemode,
+not to each of its levels.
 
 ### roomScores is per-location and sparse
 `roomScores` is the best score anyone *at that location* has posted, not a global best: coquitlam

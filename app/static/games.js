@@ -12,6 +12,7 @@
     const modeSel = document.getElementById('modeFilter');
     const unbeatenBox = document.getElementById('unbeatenOnly');
     const playerBox = document.getElementById('playerFilter');
+    const optimalBox = document.getElementById('optimalFilter');
     const statusEl = document.getElementById('gamesStatus');
     const levelsCard = document.getElementById('levelsCard');
     const levelHead = document.getElementById('levelHead');
@@ -29,7 +30,13 @@
 
     let data = null;                     // last /api/game-data payload
     let selectedPlayers = new Set();     // player ids (numbers)
+    let selectedOptimal = new Set();     // optimal player counts, plus null for unrecorded
     const expanded = new Set();          // game_ids showing their level rows
+
+    // The counts the master document actually uses, and the bucket for the 13
+    // gamemodes it leaves blank — without which ticking any box would hide
+    // them with no way to get them back.
+    const OPTIMAL_CHOICES = [2, 3, 4, 5, null];
 
     // Blocked storage throws on access; a saved filter is not worth taking the
     // page down for, so both directions swallow it (same as the chart's
@@ -66,7 +73,7 @@
     // ---------- gamemode descriptions ----------
     //
     // The rules for each gamemode ride along on the payload (see
-    // app/game_descriptions.py); the site itself has no such text. One shared
+    // app/master_document.py); the site itself has no such text. One shared
     // bubble is refilled and moved rather than one per cell, because these
     // tables are torn down and rebuilt on every filter change. It hangs off
     // <body> and is position: fixed so that .table-wrap's horizontal scroll
@@ -171,6 +178,35 @@
     window.addEventListener('scroll', followTip, true);
     window.addEventListener('resize', followTip);
 
+    // ---------- optimal player count ----------
+    //
+    // The master document's "Optimal # of players" column. It leaves 13 of the
+    // 76 gamemodes blank, which stays a dash — the page never guesses one.
+
+    // A `**` in the document means a number is written down but the community
+    // hasn't settled on it. Shown, because a soft answer beats none, but
+    // marked so it doesn't read as firm as the rest.
+    function optimalCell(game) {
+        const n = game.optimal_players;
+        if (!n) return el('td', { className: 'optimal muted', text: '—' });
+        if (!game.optimal_disputed) return el('td', { className: 'optimal', text: String(n) });
+        return el('td', {
+            className: 'optimal disputed',
+            attrs: { title: 'The document records ' + n + ', but with no clear consensus' },
+        }, [
+            el('span', { text: String(n) }),
+            el('span', { className: 'flag', text: '*', attrs: { 'aria-hidden': 'true' } }),
+            el('span', { className: 'sr-only', text: ' — no clear consensus' }),
+        ]);
+    }
+
+    // Ticking nothing constrains nothing, the way a facet filter normally
+    // behaves; the boxes narrow rather than switch things on.
+    function matchesOptimal(game) {
+        if (!selectedOptimal.size) return true;
+        return selectedOptimal.has(game.optimal_players || null);
+    }
+
     // ---------- data helpers ----------
 
     function games() {
@@ -188,6 +224,7 @@
         return games().filter(({ room, game }) => {
             if (roomId && String(room.room_id) !== roomId) return false;
             if (gameId && String(game.game_id) !== gameId) return false;
+            if (!matchesOptimal(game)) return false;
             return true;
         });
     }
@@ -319,6 +356,30 @@
         modeSel.value = [...modeSel.options].some(o => o.value === prev) ? prev : '';
     }
 
+    // Fixed choices, not built from the payload: the boxes should stay put
+    // when a location happens to have no 4-player gamemode catalogued.
+    function fillOptimalFilter() {
+        optimalBox.replaceChildren();
+        for (const n of OPTIMAL_CHOICES) {
+            const input = el('input', {
+                attrs: { type: 'checkbox', value: n === null ? '' : String(n) },
+            });
+            input.checked = selectedOptimal.has(n);
+            input.addEventListener('change', () => {
+                if (input.checked) selectedOptimal.add(n);
+                else selectedOptimal.delete(n);
+                save('optimal', [...selectedOptimal]);
+                render();
+            });
+            optimalBox.appendChild(
+                el('label', { className: 'player-check' }, [
+                    input,
+                    el('span', { text: n === null ? 'Not recorded' : String(n) }),
+                ])
+            );
+        }
+    }
+
     function fillPlayerFilter() {
         playerBox.replaceChildren();
         for (const p of data.players) {
@@ -387,6 +448,7 @@
                     el('td', { className: 'muted', text: String(i + 1) }),
                     el('td', { text: r.room.name }),
                     el('td', null, [modeName(r.game, true)]),
+                    optimalCell(r.game),
                     el('td', null, [
                         el('strong', { text: String(r.open) }),
                         el('span', { className: 'muted small', text: ' of ' + r.slots }),
@@ -397,8 +459,10 @@
         });
 
         if (!ranked.length) {
-            farmerNote.textContent =
-                'Every selected player has a score on every level in view. Nothing left to farm here.';
+            farmerNote.textContent = selectedOptimal.size
+                ? 'Nothing left to farm among the gamemodes in view. Loosen the optimal ' +
+                  'players filter to see more.'
+                : 'Every selected player has a score on every level in view. Nothing left to farm here.';
             return;
         }
         const names = players.map(p => p.display_name).join(', ');
@@ -406,7 +470,9 @@
             'Open levels counts (player × level) pairs with no score, for ' + names +
             '. Points on the table sums this location’s top score for those levels, ' +
             'standing in the median score for that level number where nobody here has ' +
-            'scored yet — a rough ceiling, not a prediction. Reflects the filters above.';
+            'scored yet — a rough ceiling, not a prediction. Optimal players is the ' +
+            'community master document’s figure for the gamemode, not a rule the site ' +
+            'enforces. Reflects the filters above.';
     }
 
     function renderUnscored() {
@@ -431,6 +497,7 @@
                 el('tr', null, [
                     el('td', { text: r.room.name }),
                     el('td', null, [modeName(r.game, true)]),
+                    optimalCell(r.game),
                     el('td', {
                         className: 'count' + (r.levels.length === total ? ' full' : ''),
                     }, [
@@ -451,7 +518,8 @@
         unscoredNote.textContent =
             levels + ' level' + (levels === 1 ? '' : 's') + ' across ' + rows.length +
             ' gamemode' + (rows.length === 1 ? '' : 's') + ', by the site’s level numbering. ' +
-            'Follows the game and gamemode filters; the player filter does not apply. ' +
+            'Follows the game, gamemode and optimal players filters; the player filter ' +
+            'does not apply. ' +
             'A location’s top scores are only re-read when one of the tracked players ' +
             'scores there, so a very recent first score may not have landed yet.';
     }
@@ -476,6 +544,7 @@
         levelHead.replaceChildren(
             el('tr', null, [
                 el('th', { text: 'Gamemode' }),
+                el('th', { text: 'Optimal players' }),
                 el('th', { text: 'Top score' }),
                 ...players.map(p => el('th', { text: p.display_name })),
             ])
@@ -493,7 +562,7 @@
                     el('tr', { className: 'room-row' }, [
                         el('th', {
                             text: room.name,
-                            attrs: { colspan: String(2 + players.length), scope: 'colgroup' },
+                            attrs: { colspan: String(3 + players.length), scope: 'colgroup' },
                         }),
                     ])
                 );
@@ -517,6 +586,7 @@
                 el('span', { className: 'toggle', text: '▸', attrs: { 'aria-hidden': 'true' } }),
                 modeName(game),
             ]),
+            optimalCell(game),
             el('td', {
                 className: 'muted small',
                 text: ceiling ? fmt.format(ceiling) : '—',
@@ -562,6 +632,10 @@
         return el('tr', { className: 'level-row' }, [
             // Level ids are 0-based in the payload; the site numbers them from 1.
             el('td', { className: 'level-name', text: 'Level ' + (levelId + 1) }),
+            // Optimal players is a property of the gamemode, not of one level;
+            // the column stays empty rather than repeating the same number down
+            // every row of an expanded gamemode.
+            el('td'),
             el('td', { className: 'muted small', text: top === null ? '—' : fmt.format(top) }),
             ...players.map(p => {
                 const score = scoreOf(p.id, game.game_id, levelId);
@@ -615,6 +689,7 @@
         fillGameFilter();
         fillModeFilter();
         fillPlayerFilter();
+        fillOptimalFilter();
         render();
     }
 
@@ -642,6 +717,13 @@
         locationSel.value = String(savedLocation);
     }
     unbeatenBox.checked = load('unbeaten', false) === true;
+    // Restored before the fetch, unlike the selects: the choices are fixed, so
+    // nothing here depends on which location loads. JSON round-trips the
+    // unrecorded bucket as null already.
+    const savedOptimal = load('optimal', null);
+    if (Array.isArray(savedOptimal)) {
+        selectedOptimal = new Set(savedOptimal.filter(n => OPTIMAL_CHOICES.includes(n)));
+    }
 
     loadLocation(locationSel.value).then(() => {
         // Filters are populated from the payload, so restoring them has to wait

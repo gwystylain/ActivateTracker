@@ -10,7 +10,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from .. import catalog as catalog_mod
-from .. import game_descriptions
+from .. import master_document
 from .. import streak as streak_mod
 from ..auth import csrf_token_for, read_session
 
@@ -228,15 +228,16 @@ async def game_data(request: Request, location_id: int | None = None) -> JSONRes
 # ---------- helpers ----------
 
 def _described(rooms: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Hang the master document's rules on each gamemode, for the /games tooltips.
+    """Hang the master document's rules and player count on each gamemode.
 
     Attached here rather than stored with the catalog because it is static
-    reference text keyed by name, not something the site tells us. A gamemode
-    the document doesn't cover gets a null and renders with no tooltip.
+    reference data keyed by name, not something the site tells us. A gamemode
+    the document doesn't cover gets nulls, and renders with neither a tooltip
+    nor an optimal-players figure.
     """
     for room in rooms:
         for game in room["games"]:
-            game["description"] = game_descriptions.describe(room["name"], game["name"])
+            game.update(master_document.lookup(room["name"], game["name"]))
     return rooms
 
 
