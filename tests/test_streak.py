@@ -1,11 +1,21 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from app.streak import (
     DISCOUNT_WINDOW_DAYS,
+    activity_day,
     discount_for,
     summarize,
     visits_in_window,
 )
+
+
+def test_activity_day_backs_out_the_refresh_lag():
+    """One rule, three input shapes: the poller passes the datetime it polled
+    at, the chart passes the stored ISO string."""
+    assert activity_day(datetime(2026, 8, 7, 11, 0, tzinfo=timezone.utc)) == date(2026, 8, 6)
+    assert activity_day("2026-08-07T11:00:03+00:00") == date(2026, 8, 6)
+    assert activity_day(date(2026, 8, 7)) == date(2026, 8, 6)
+    assert activity_day("2026-01-01T00:00:00") == date(2025, 12, 31)  # across the year
 
 
 def test_discount_tiers():

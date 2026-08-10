@@ -35,7 +35,10 @@ headers gets `403 Forbidden`; only TLS-impersonating clients work. The scraper h
 ### Visit detection from score deltas (no visit API)
 playactivate.com exposes scores but not visit timestamps. The poller infers visits by comparing
 `total_score` of each new snapshot against the most recent prior snapshot for the same
-`(player_id, location_id)`. A strictly-greater value inserts one row in `visits` dated today.
+`(player_id, location_id)`. A strictly-greater value inserts one row in `visits` dated
+`streak.activity_day(polled_at)` — the day *before* the poll, because playactivate's scores
+refresh ~1 day late: play on May 14 first shows up in the May 15 poll. That helper is the single
+home of the rule; the chart's x-axis uses it too, so a point and its visit can't disagree.
 Multi-location increases on the same calendar day are deduped to one visit by `streak.summarize`,
 which is what Activate's per-day visit counting actually does. `streak.visits_in_window` counts
 unique visit days inside the trailing 30 days; `streak.discount_for` maps that count to a discount
@@ -56,6 +59,11 @@ when *either* metric moved (the first observation always counts); days where nei
 out, which is what keeps the chart from growing a dot per poll on uneventful days. Each point also
 carries a `locations: {slug: score}` breakdown that forward-fills per-location values across days
 where only some locations were polled.
+
+A point's `date` is the day of *play*, `streak.activity_day(polled_at)`, not the `polled_at` day
+it was grouped from — the same shift the visit rows get. Reading the poll date straight off the
+snapshot is what put every dot a day late while "days since last visit" stayed right: the latter
+reads `visits.visit_date`, which had the lag backed out all along.
 
 Deciding which dates get a visible dot is the front-end's job (`app/static/app.js`), because it
 depends on the selected metric: `changeDates()` walks the emitted points and marks only those where

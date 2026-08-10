@@ -134,9 +134,10 @@ async def test_chart_emits_day_when_only_the_sum_moves(tmp_path):
     _snap(conn, pid, 72, "2026-08-02T00:00:00", position=1, beat=1, total=300)
 
     (player,) = (await _chart(conn))["players"]
+    # Dates are the play days, one behind the polls that observed them.
     assert [(p["date"], p["top_score"], p["total_score"]) for p in player["points"]] == [
-        ("2026-08-01", 500, 600),
-        ("2026-08-02", 500, 800),
+        ("2026-07-31", 500, 600),
+        ("2026-08-01", 500, 800),
     ]
 
 
@@ -148,7 +149,19 @@ async def test_chart_drops_days_where_neither_metric_moves(tmp_path):
     _snap(conn, pid, 72, "2026-08-03T00:00:00", position=1, beat=1, total=180)
 
     (player,) = (await _chart(conn))["players"]
-    assert [p["date"] for p in player["points"]] == ["2026-08-01", "2026-08-03"]
+    assert [p["date"] for p in player["points"]] == ["2026-07-31", "2026-08-02"]
+
+
+async def test_chart_dates_points_to_the_day_of_play(tmp_path):
+    """The x-axis must agree with the visit dates the dashboard counts: the
+    score seen by the Aug 7 poll was earned on Aug 6 (the site's refresh lag),
+    so the point belongs on Aug 6."""
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _snap(conn, pid, 72, "2026-08-07T11:00:03+00:00", position=1, beat=1, total=100)
+
+    (player,) = (await _chart(conn))["players"]
+    assert [p["date"] for p in player["points"]] == ["2026-08-06"]
 
 
 async def test_chart_excludes_hidden_players(tmp_path):

@@ -6,7 +6,7 @@ import json
 import logging
 import random
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Iterable
 
 from curl_cffi.requests import AsyncSession
@@ -14,6 +14,7 @@ from curl_cffi.requests.exceptions import RequestException
 
 from . import catalog as catalog_mod
 from . import scraper
+from . import streak
 from .config import PollConfig
 from .db import transaction
 
@@ -197,13 +198,13 @@ def persist_snapshot(
 ) -> bool:
     """Insert snapshot. If totalScore went up vs last snapshot, also insert a visit.
 
-    Returns True iff a visit was inserted. The visit is dated to the day *before*
-    detection because playactivate's score refresh lags by ~1 day: a visit on
-    May 14 first appears in the poll on May 15.
+    Returns True iff a visit was inserted. The visit is dated to the day the
+    play actually happened rather than the day we noticed — `streak.activity_day`
+    owns that rule, shared with the chart's x-axis so the two can't drift.
     """
     now = now or datetime.now(timezone.utc)
     polled_at = now.isoformat(timespec="seconds")
-    visit_date = (now.date() - timedelta(days=1)).isoformat()
+    visit_date = streak.activity_day(now).isoformat()
 
     with transaction(conn):
         prior = conn.execute(

@@ -19,10 +19,31 @@ Activate discount rules (based on visits in the trailing 30 days):
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 DISCOUNT_WINDOW_DAYS = 30
 DISCOUNT_MAX_PCT = 25
+
+#: playactivate's score refresh lags by ~1 day (see `activity_day`).
+SCORE_REFRESH_LAG_DAYS = 1
+
+
+def activity_day(polled_at: str | date | datetime) -> date:
+    """The calendar day of play that a poll's scores describe.
+
+    playactivate's score refresh lags by ~1 day: a visit on May 14 first shows
+    up in the poll on May 15. Everything that dates the *data* — the visit rows
+    and the chart's x-axis — has to subtract that lag, or it reports the day we
+    noticed instead of the day the player was there. The stored `polled_at` is
+    deliberately not shifted: that one really is when we fetched.
+    """
+    if isinstance(polled_at, str):
+        day = date.fromisoformat(polled_at[:10])
+    elif isinstance(polled_at, datetime):  # before date: datetime is a date
+        day = polled_at.date()
+    else:
+        day = polled_at
+    return day - timedelta(days=SCORE_REFRESH_LAG_DAYS)
 
 
 @dataclass(frozen=True)

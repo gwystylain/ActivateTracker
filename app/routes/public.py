@@ -86,7 +86,10 @@ async def chart_data(request: Request) -> JSONResponse:
         handle = r["handle"]
         display_name_for[handle] = r["display_name"]
         handle_to_player_id[handle] = r["player_id"]
-        day = r["polled_at"][:10]
+        # The day of *play*, not the day of the poll — the site's scores lag by
+        # ~1 day, so an x-axis of raw poll dates puts every point a day late
+        # (and a day away from the visit dates the dashboard counts).
+        day = streak_mod.activity_day(r["polled_at"]).isoformat()
         per_handle_per_day_per_loc[handle][day][r["location_id"]] = r["total_score"]
 
     payload: list[dict[str, Any]] = []
