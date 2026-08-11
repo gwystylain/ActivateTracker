@@ -39,6 +39,11 @@ CREATE TABLE IF NOT EXISTS score_snapshots (
     coins           INTEGER,
     levels_beat     INTEGER,
     level_count     INTEGER,
+    -- playerLocation.trophyProgress, reduced to a count. The page's own tally,
+    -- kept as a cross-check on the badge API's enumerated list and as the
+    -- fallback if that proxy ever goes away. NULL when the page omits the field.
+    badges_earned   INTEGER,
+    badges_possible INTEGER,
     raw_scores_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_snap_player_time
@@ -87,6 +92,39 @@ CREATE TABLE IF NOT EXISTS location_catalog (
     fetched_at     TEXT NOT NULL
 );
 
+-- Activate's badge catalog, as the badge API reports it. Upserted on every
+-- poll: the response lists every badge applicable to the player, earned or not,
+-- so there is no separate catalog fetch. `badge_id` is Activate's own id, and
+-- `name` is deliberately not UNIQUE — "Untouchable 5.0" is two different badges
+-- (Piperooni and Wormholes), so the name cannot be a key.
+CREATE TABLE IF NOT EXISTS badges (
+    badge_id    INTEGER PRIMARY KEY,
+    name        TEXT NOT NULL,
+    description TEXT NOT NULL,
+    stars       INTEGER,          -- the badge's own value, not profile stars
+    first_seen  TEXT NOT NULL,
+    last_seen   TEXT NOT NULL
+);
+
+-- One row per player per badge they could earn. No location_id: the endpoint is
+-- keyed on the handle alone, and badges transfer between locations where scores
+-- and rank do not.
+CREATE TABLE IF NOT EXISTS player_badges (
+    player_id      INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    badge_id       INTEGER NOT NULL REFERENCES badges(badge_id),
+    earned         INTEGER NOT NULL DEFAULT 0,
+    progress       INTEGER,
+    -- 0 means the badge has no denominator (Completionist, Halfway Mark,
+    -- Activated, The Grand Tour): `progress` is a bare count. Never divide.
+    total_progress INTEGER,
+    -- activity_day of the poll that first saw it earned — the same one-day
+    -- backdate the visit rows get, since Activate's data refreshes a day late.
+    -- NULL for a badge already earned when we first polled the player.
+    earned_on      TEXT,
+    updated_at     TEXT NOT NULL,
+    PRIMARY KEY (player_id, badge_id)
+);
+
 CREATE TABLE IF NOT EXISTS login_attempts (
     ip           TEXT NOT NULL,
     attempted_at TEXT NOT NULL
@@ -123,7 +161,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
         )
 
     snap_cols = {r["name"] for r in conn.execute("PRAGMA table_info(score_snapshots)")}
-    for col in ("levels_beat", "level_count", "leaderboard_position"):
+    for col in (
+        "levels_beat",
+        "level_count",
+        "leaderboard_position",
+        "badges_earned",
+        "badges_possible",
+    ):
         if col not in snap_cols:
             conn.execute(f"ALTER TABLE score_snapshots ADD COLUMN {col} INTEGER")
 

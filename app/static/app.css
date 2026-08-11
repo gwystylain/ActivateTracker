@@ -8,6 +8,11 @@
     --danger: #f85149;
     --ok: #3fb950;
     --gold: #e3b341;
+    /* Trophy tiers. Gold already existed for the records crown and is reused,
+       so a gold trophy and a held record read as the same kind of thing. */
+    --bronze: #cd7f32;
+    --silver: #c3ccd6;
+    --platinum: #9fe7f5;
     --border: #30363d;
 }
 * { box-sizing: border-box; }
@@ -239,6 +244,94 @@ table.level-table td.top-score .val { display: inline-block; font-variant-numeri
     }
     to { box-shadow: inset 0 0 0 1px rgba(227, 179, 65, 0), inset 0 0 22px rgba(227, 179, 65, 0); }
 }
+
+/* ---------- /badges ---------- */
+
+table.badge-summary td.count,
+table.badge-close td.count { font-variant-numeric: tabular-nums; }
+
+.trophy {
+    display: inline-block; padding: 1px 9px; border-radius: 999px;
+    font-size: 0.85em; font-weight: 600;
+    background: var(--panel-2); border: 1px solid var(--border);
+}
+.trophy-bronze   { color: var(--bronze);   border-color: rgba(205, 127, 50, 0.5); }
+.trophy-silver   { color: var(--silver);   border-color: rgba(195, 204, 214, 0.5); }
+.trophy-gold     { color: var(--gold);     border-color: rgba(227, 179, 65, 0.5); }
+.trophy-platinum { color: var(--platinum); border-color: rgba(159, 231, 245, 0.55); }
+
+/* Platinum is every badge at the location, so it gets the same shimmer a held
+   record does. Behind @supports as well as reduced-motion: without the guard a
+   browser lacking background-clip would paint invisible text, not plain text. */
+@media (prefers-reduced-motion: no-preference) {
+    @supports (background-clip: text) or (-webkit-background-clip: text) {
+        .trophy-platinum {
+            background-image: linear-gradient(100deg,
+                var(--platinum) 42%, #ffffff 50%, var(--platinum) 58%);
+            background-size: 250% 100%;
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            animation: record-shine 4.5s linear infinite;
+        }
+    }
+}
+
+table.badge-grid td.beat { font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.badge-grid td.beat.all { color: var(--ok); }
+table.badge-grid td.beat.some { color: var(--accent); }
+table.badge-grid td.beat.none { color: var(--muted); }
+
+/* Progress towards a badge. Inline-block rather than a <progress> element so it
+   sits on the same baseline as the count beside it. */
+.bar {
+    display: inline-block; width: 90px; height: 7px; vertical-align: middle;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px;
+    overflow: hidden;
+}
+.bar-fill { display: block; height: 100%; background: var(--accent); }
+
+.warn { color: var(--gold); }
+
+table.badge-grid tr.badge-row { cursor: pointer; }
+table.badge-grid tr.badge-row:hover { background: var(--panel-2); }
+table.badge-grid tr.badge-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+table.badge-grid tr.badge-row .toggle { display: inline-block; margin-right: 6px; color: var(--muted); transition: transform 0.12s; }
+table.badge-grid tr.badge-row.expanded .toggle { transform: rotate(90deg); }
+table.badge-grid tr.detail-row > td { background: var(--panel-2); padding: 0; }
+
+/* The detail cell spans every column, so it is as wide as the table — which on
+   a narrow screen is wider than the screen. Sticky at the left edge of the
+   scroll container keeps the prose in view no matter how far the columns are
+   scrolled, so reading a tip never means scrolling sideways. */
+.badge-detail {
+    position: sticky; left: 0;
+    box-sizing: border-box;
+    /* 4rem covers the card's own padding either side of the scroll container;
+       on any normal screen the 78ch reading measure wins anyway. */
+    width: min(78ch, calc(100vw - 4rem));
+    padding: 12px 16px 14px;
+}
+/* Grid, not an inline-block label: a wrapped second line has to stay in the
+   value column rather than falling back to the left margin. */
+.detail-line {
+    display: grid; grid-template-columns: 8.5em 1fr; gap: 4px 10px;
+    margin: 0 0 7px; line-height: 1.45;
+}
+.detail-line:last-child { margin-bottom: 0; }
+.detail-label {
+    color: var(--muted); font-size: 0.85em; text-transform: uppercase;
+    letter-spacing: 0.04em; padding-top: 0.15em;
+}
+@media (max-width: 560px) {
+    .detail-line { grid-template-columns: 1fr; gap: 0; }
+}
+
+.diff { font-size: 0.85em; white-space: nowrap; }
+.diff-easy { color: var(--ok); }
+.diff-medium { color: var(--accent); }
+.diff-hard { color: var(--gold); }
+.diff-veryhard { color: var(--danger); }
 
 .actions { white-space: nowrap; }
 .actions .button-link {

@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
+from .. import badge_reference
 from .. import catalog as catalog_mod
 from .. import master_document
 from .. import streak as streak_mod
@@ -162,6 +163,106 @@ async def games(request: Request):
     )
 
 
+@router.get("/badges", response_class=HTMLResponse)
+async def badges(request: Request):
+    cfg = request.app.state.config
+    conn = request.app.state.db
+    templates = request.app.state.templates
+
+    session = read_session(cfg, request.cookies.get(cfg.session.cookie_name))
+    has_badges = conn.execute("SELECT 1 FROM badges LIMIT 1").fetchone() is not None
+
+    return templates.TemplateResponse(
+        "badges.html",
+        {
+            "request": request,
+            "has_badges": has_badges,
+            "logged_in": session is not None,
+            "csrf_token": csrf_token_for(session),
+        },
+    )
+
+
+@router.get("/api/badge-data")
+async def badge_data(request: Request) -> JSONResponse:
+    """Every tracked player's badge state, in one payload.
+
+    Badges are player-level — the badge API is keyed on the handle alone — so
+    unlike /api/game-data there is nothing to select by location and the page
+    never refetches. ~120 badges times a handful of players is small enough to
+    send whole and re-filter client-side.
+    """
+    conn = request.app.state.db
+
+    catalog = _describe_badges(
+        [
+            dict(r)
+            for r in conn.execute(
+                "SELECT badge_id, name, description, stars FROM badges"
+                " ORDER BY name, badge_id"
+            ).fetchall()
+        ]
+    )
+    if not catalog:
+        return JSONResponse(
+            {"players": [], "badges": [], "states": {}, "locations": []}
+        )
+
+    reported = _reported_badges(conn)
+    states: dict[str, dict[str, Any]] = {}
+    players: list[dict[str, Any]] = []
+
+    for p in conn.execute(
+        "SELECT id, handle, display_name FROM players WHERE hidden = 0 ORDER BY handle"
+    ).fetchall():
+        rows = conn.execute(
+            """
+            SELECT badge_id, earned, progress, total_progress, earned_on, updated_at
+            FROM player_badges WHERE player_id = ?
+            """,
+            (p["id"],),
+        ).fetchall()
+        if not rows:
+            continue
+
+        states[str(p["id"])] = {
+            str(r["badge_id"]): {
+                "earned": bool(r["earned"]),
+                "progress": r["progress"] or 0,
+                "total_progress": r["total_progress"] or 0,
+                "earned_on": r["earned_on"],
+            }
+            for r in rows
+        }
+        earned = sum(1 for r in rows if r["earned"])
+        said = reported.get(p["id"], {})
+        players.append(
+            {
+                "id": p["id"],
+                "handle": p["handle"],
+                "display_name": p["display_name"] or p["handle"],
+                "earned": earned,
+                "possible": len(rows),
+                # What the score page's own trophyProgress worked out to, kept
+                # separate rather than reconciled: they come from different
+                # endpoints and a disagreement is worth seeing, not smoothing.
+                "reported_earned": said.get("earned"),
+                "reported_possible": said.get("possible"),
+                "updated_at": max(r["updated_at"] for r in rows),
+                **_trophy_for(earned, len(rows)),
+            }
+        )
+
+    return JSONResponse(
+        {
+            "players": players,
+            "badges": catalog,
+            "states": states,
+            "locations": _rooms_by_location(conn),
+        }
+    )
+
+
 @router.get("/api/game-data")
 async def game_data(request: Request, location_id: int | None = None) -> JSONResponse:
     """Everything the /games page needs for one location, in one payload.
@@ -229,6 +330,112 @@ async def game_data(request: Request, location_id: int | None = None) -> JSONRes
 
 
 # ---------- helpers ----------
+
+# Badge counts that earn a trophy, from the community master document and
+# corroborated by the site's own trophyProgress thresholds. Platinum is not a
+# count but *all* of them — "100% of badges, not 100 badges" — and how many that
+# is varies by location, since a badge needing a room the location lacks is
+# never offered. So platinum's threshold is passed in rather than fixed here.
+TROPHY_TIERS = (("bronze", 25), ("silver", 50), ("gold", 75))
+
+
+def _trophy_for(earned: int, possible: int | None) -> dict[str, Any]:
+    """Which trophy this many badges earns, and what the next one costs.
+
+    A threshold above the number of badges on offer is unreachable and is
+    dropped rather than dangled: a location with 40 badges can never produce
+    the 50 silver wants, so "24 to silver" would be an errand with no end.
+    """
+    tiers = sorted(
+        [
+            *(t for t in TROPHY_TIERS if possible is None or t[1] <= possible),
+            *([("platinum", possible)] if possible else []),
+        ],
+        key=lambda t: t[1],
+    )
+    tier = None
+    for name, need in tiers:
+        if earned >= need:
+            tier = name
+    nxt = next(((n, need) for n, need in tiers if earned < need), None)
+    return {
+        "tier": tier,
+        "next_tier": nxt[0] if nxt else None,
+        "to_next": nxt[1] - earned if nxt else None,
+    }
+
+
+def _describe_badges(badges: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Hang the community documents' detail on each badge.
+
+    Attached here rather than stored with the badge, for the same reason
+    `_described` does it for gamemodes: it is static reference data keyed by
+    name, not something Activate told us, so it has no business in a table that
+    mirrors upstream. Looked up by name *and* description because the name alone
+    is ambiguous — "Untouchable 5.0" is two badges in two different rooms.
+    """
+    for badge in badges:
+        detail = badge_reference.lookup(badge["name"], badge["description"])
+        badge.update({k: v for k, v in detail.items() if k != "name"})
+    return badges
+
+
+def _rooms_by_location(conn) -> list[dict[str, Any]]:
+    """Which rooms each tracked location has, so the page can say where a badge
+    is obtainable. The two locations probed genuinely differ — Pipes at Langley,
+    Portals at Coquitlam — which is what makes it worth saying."""
+    rooms: dict[int, set[str]] = defaultdict(set)
+    for r in conn.execute(
+        "SELECT DISTINCT location_id, room_name FROM location_games"
+    ).fetchall():
+        rooms[r["location_id"]].add(r["room_name"])
+
+    return [
+        {**loc, "rooms": sorted(rooms.get(loc["location_id"], ()))}
+        for loc in _tracked_locations(conn)
+        if rooms.get(loc["location_id"])
+    ]
+
+
+def _reported_badges(conn) -> dict[int, dict[str, int | None]]:
+    """The badge tally each player's newest snapshot read off the score page.
+
+    Independent of the badge API: this is `trophyProgress` reduced to a count at
+    poll time. Used only to corroborate — where the two disagree the page says
+    so rather than picking one.
+    """
+    out: dict[int, dict[str, int | None]] = {}
+    for r in conn.execute(
+        """
+        SELECT player_id, badges_earned, badges_possible
+        FROM score_snapshots
+        WHERE badges_earned IS NOT NULL
+        ORDER BY player_id, polled_at, id
+        """
+    ).fetchall():
+        # Ascending, so the last row per player wins — the newest observation.
+        out[r["player_id"]] = {
+            "earned": r["badges_earned"],
+            "possible": r["badges_possible"],
+        }
+    return out
+
+
+def _badge_counts(conn) -> dict[int, dict[str, int]]:
+    """Per-player (earned, possible) for the dashboard's Badges column."""
+    return {
+        r["player_id"]: {"earned": r["earned"], "possible": r["possible"]}
+        for r in conn.execute(
+            """
+            SELECT player_id,
+                   SUM(earned) AS earned,
+                   COUNT(*)    AS possible
+            FROM player_badges
+            GROUP BY player_id
+            """
+        ).fetchall()
+    }
+
 
 def _described(rooms: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Hang the master document's rules and player count on each gamemode.
@@ -399,6 +606,10 @@ def _build_player_summaries(conn, *, today: date) -> list[dict[str, Any]]:
         """
     ).fetchall()
 
+    # Player-level, not per-location: badges transfer between locations, so the
+    # figure sits on the headline row only and the location rows leave it blank.
+    badge_counts = _badge_counts(conn)
+
     out: list[dict[str, Any]] = []
     for p in players:
         visit_rows = conn.execute(
@@ -497,6 +708,8 @@ def _build_player_summaries(conn, *, today: date) -> list[dict[str, Any]]:
                 "position": best_position,
                 "levels_beat": top_beat["levels_beat"] if top_beat else None,
                 "level_count": top_beat["level_count"] if top_beat else None,
+                "badges_earned": badge_counts.get(p["id"], {}).get("earned"),
+                "badges_possible": badge_counts.get(p["id"], {}).get("possible"),
                 "days_since_last_visit": summary.days_since_last_visit,
                 "last_visit_date": summary.last_visit_date.isoformat()
                 if summary.last_visit_date

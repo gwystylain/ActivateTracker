@@ -57,6 +57,21 @@ class PollConfig(BaseModel):
         return v
 
 
+class BadgeConfig(BaseModel):
+    """Where to read per-player badges from.
+
+    The default is a community-run proxy in front of an official Activate badge
+    API — the score pages we scrape carry no badge list at all. It is somebody's
+    personal server, so the base URL is configuration: pointing at the upstream
+    directly, or at a mirror, should never need a code change. Setting
+    `enabled: false` skips the fetch entirely and leaves the dashboard's badge
+    count running off the page's own trophyProgress tally.
+    """
+
+    enabled: bool = True
+    api_base: str = "https://api.ryflix.ca/api/badges"
+
+
 class ServerConfig(BaseModel):
     trusted_proxy_hops: int = 1
     forwarded_allow_ips: str = "*"
@@ -66,6 +81,7 @@ class AppConfig(BaseModel):
     admin: AdminConfig
     session: SessionConfig
     poll: PollConfig = Field(default_factory=PollConfig)
+    badges: BadgeConfig = Field(default_factory=BadgeConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
 
 

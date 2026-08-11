@@ -80,7 +80,7 @@ async def lifespan(app: FastAPI):
 
         async def scheduled_poll():
             try:
-                await poller.poll_all(conn, cfg.poll)
+                await poller.poll_all(conn, cfg.poll, badge_cfg=cfg.badges)
             except Exception:
                 log.exception("scheduled poll failed")
 

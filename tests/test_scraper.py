@@ -1,12 +1,18 @@
+import json
 from pathlib import Path
 
 import pytest
 
 from app.scraper import (
+    BadgeState,
+    FetchError,
     ScrapeError,
     ScrapeResult,
+    badges_from_trophy_progress,
+    combine_badges,
     combine_results,
     extract_player_blob,
+    parse_badges,
     parse_html,
     parse_room_html,
     room_slug,
@@ -230,3 +236,122 @@ def test_brace_balance_handles_strings_and_escapes():
     blob = extract_player_blob(fake)
     assert blob["locationId"] == "99"
     assert blob["player"]["playerName"] == 'weird "quote"'
+
+
+# ---------- badges ----------
+
+BADGE_FIXTURE = Path(__file__).parent / "fixtures" / "badges_gmebagholder.json"
+
+
+def _badge_payload():
+    return json.loads(BADGE_FIXTURE.read_text(encoding="utf-8"))
+
+
+def test_parses_every_badge_with_its_earned_state():
+    states = parse_badges(_badge_payload())
+    assert len(states) == 118
+    assert sum(1 for s in states if s.earned) == 11
+
+    early = next(s for s in states if s.name == "Early Bird")
+    assert (early.earned, early.stars) == (True, 5)
+    assert early.description == "Win a game before 11 AM"
+
+
+def test_two_badges_share_a_name_so_the_id_is_the_key():
+    """Untouchable 5.0 is Piperooni's and Wormholes', not one badge seen twice.
+    Keying on the name would silently drop one of the 118."""
+    states = parse_badges(_badge_payload())
+    same_name = [s for s in states if s.name == "Untouchable 5.0"]
+
+    assert len(same_name) == 2
+    assert {s.badge_id for s in same_name} == {111, 125}
+    assert len({s.description for s in same_name}) == 2
+    assert len({s.badge_id for s in states}) == 118
+
+
+def test_a_badge_with_no_target_is_not_treated_as_complete():
+    """Four badges report a running count and a totalProgress of 0. Anything
+    dividing by that denominator would blow up or read as finished."""
+    states = parse_badges(_badge_payload())
+    open_ended = [s for s in states if s.total_progress == 0]
+
+    assert {s.name for s in open_ended} == {
+        "Activated", "Halfway Mark", "Completionist", "The Grand Tour",
+    }
+    for s in open_ended:
+        assert s.progress > 0 and not s.earned
+
+
+def test_a_duplicate_id_collapses_rather_than_inflating_the_total():
+    payload = _badge_payload()
+    states = parse_badges([*payload, dict(payload[0], status=True)])
+    assert len(states) == 118
+    assert next(s for s in states if s.badge_id == payload[0]["id"]).earned
+
+
+def test_badge_payload_that_is_not_a_list_is_an_error_not_an_empty_set():
+    """An empty list would read as "this player has no badges" and wipe them."""
+    with pytest.raises(ScrapeError):
+        parse_badges({"badges": []})
+    with pytest.raises(FetchError):
+        parse_badges({"error": "Activate API returned 500"})
+
+
+def test_trophy_progress_recovers_the_same_count_the_badge_api_reports():
+    """Two unrelated sources, one answer: the score page states four fractions
+    of a threshold, the badge API lists the badges. Both say 11 of 118."""
+    html = ROOM_FIXTURE.read_text(encoding="utf-8")
+    r = parse_html(html, handle="gmebagholder", location_id=38, slug="coquitlam")
+
+    assert badges_from_trophy_progress(r.trophy_progress) == (11, 118)
+    states = parse_badges(_badge_payload())
+    assert (sum(1 for s in states if s.earned), len(states)) == (11, 118)
+
+
+def test_a_page_without_trophy_progress_yields_no_count_rather_than_zero():
+    """The langley capture predates the field. Zero would be a claim; None
+    is the absence of one."""
+    html = FIXTURE.read_text(encoding="utf-8")
+    r = parse_html(html, handle="gmebagholder", location_id=72, slug="langley")
+
+    assert r.trophy_progress is None
+    assert badges_from_trophy_progress(r.trophy_progress) == (None, None)
+    assert badges_from_trophy_progress({}) == (None, None)
+    assert badges_from_trophy_progress({"bronze": "nonsense"}) == (None, None)
+
+
+def test_the_count_is_read_off_the_finest_tier_still_in_progress():
+    """progress is 2dp, so the error is ±0.005×threshold — reading platinum's
+    118 could be a badge out, while bronze's 25 cannot."""
+    tp = {
+        "bronze": {"progress": 1.0, "requiredBadges": 25},
+        "silver": {"progress": 0.62, "requiredBadges": 50},
+        "gold": {"progress": 0.41, "requiredBadges": 75},
+        "platinum": {"progress": 0.26, "requiredBadges": 118},
+    }
+    assert badges_from_trophy_progress(tp) == (31, 118)   # silver: 0.62 * 50
+
+
+def test_every_tier_complete_means_every_badge():
+    tp = {
+        "bronze": {"progress": 1.0, "requiredBadges": 25},
+        "platinum": {"progress": 1.0, "requiredBadges": 118},
+    }
+    assert badges_from_trophy_progress(tp) == (118, 118)
+
+
+def test_combining_handles_unions_earned_and_keeps_the_best_progress():
+    """Two of one person's accounts hold overlapping badge sets. Summing would
+    invent a total neither account has; the union is what the person can show."""
+    a = [
+        BadgeState(1, "A", "a", earned=True, progress=1, total_progress=1, stars=5),
+        BadgeState(2, "B", "b", earned=False, progress=4, total_progress=25, stars=5),
+    ]
+    b = [
+        BadgeState(1, "A", "a", earned=False, progress=0, total_progress=1, stars=5),
+        BadgeState(2, "B", "b", earned=False, progress=19, total_progress=25, stars=5),
+    ]
+    merged = {s.badge_id: s for s in combine_badges([a, b])}
+
+    assert merged[1].earned is True
+    assert (merged[2].earned, merged[2].progress) == (False, 19)

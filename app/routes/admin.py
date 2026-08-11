@@ -265,7 +265,7 @@ async def manual_refresh(request: Request, background: BackgroundTasks):
     conn = request.app.state.db
 
     async def run():
-        await poller.poll_all(conn, cfg.poll)
+        await poller.poll_all(conn, cfg.poll, badge_cfg=cfg.badges)
 
     background.add_task(run)
     return RedirectResponse("/admin?refreshed=1", status_code=303)
@@ -286,7 +286,9 @@ async def manual_catalog_refresh(request: Request, background: BackgroundTasks):
     conn = request.app.state.db
 
     async def run():
-        await poller.poll_all(conn, cfg.poll, force_catalog=True)
+        await poller.poll_all(
+            conn, cfg.poll, force_catalog=True, badge_cfg=cfg.badges
+        )
 
     background.add_task(run)
     return RedirectResponse("/admin?refreshed=catalog", status_code=303)

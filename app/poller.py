@@ -15,7 +15,7 @@ from curl_cffi.requests.exceptions import RequestException
 from . import catalog as catalog_mod
 from . import scraper
 from . import streak
-from .config import PollConfig
+from .config import BadgeConfig, PollConfig
 from .db import transaction
 
 log = logging.getLogger(__name__)
@@ -50,11 +50,16 @@ async def poll_all(
     poll_cfg: PollConfig,
     *,
     force_catalog: bool = False,
+    badge_cfg: BadgeConfig | None = None,
 ) -> dict[str, int]:
     """Poll every tracked (player, location). Returns counters for logging.
 
     Serialised on a global lock so the manual button can't pile up concurrent
     polls or race the daily scheduler.
+
+    `badge_cfg` is opt-in: without it the poll fetches scores and the catalog
+    only. Badges are the one leg that leaves playactivate.com for a third
+    party's proxy, so a caller asks for them explicitly.
 
     `force_catalog` re-walks every location's rooms even when nothing suggests
     it changed. Normally the walk is throttled to score changes (see
@@ -88,6 +93,9 @@ async def poll_all(
             "catalog_locations": 0,
             "catalog_rooms": 0,
             "catalog_errors": 0,
+            "badges_fetched": 0,
+            "badges_newly_earned": 0,
+            "badges_errors": 0,
         }
         if not rows:
             return counters
@@ -99,10 +107,15 @@ async def poll_all(
         # refresh. `changed` is sticky — any player's score rising there is
         # enough to re-read the room pages.
         seen_locations: dict[int, dict] = {}
+        # Badges are per player, not per (player, location) — the endpoint takes
+        # only a handle — so a player at three locations still costs one fetch
+        # per handle, taken once after the score loop.
+        seen_players: dict[int, list[str]] = {}
 
         async with AsyncSession() as session:
             for row in rows:
                 handles = parse_handles(row["handle"])
+                seen_players.setdefault(row["player_id"], handles)
                 results: list[scraper.ScrapeResult] = []
                 for handle in handles:
                     if not first_request:
@@ -153,6 +166,45 @@ async def poll_all(
                 if combined.rooms:
                     loc["rooms"] = combined.rooms
                     loc["level_count"] = combined.level_count
+
+            # Opt-in: no config means scores and catalog only. Badges are the
+            # one leg that leaves playactivate.com for a third party's proxy, so
+            # a caller has to ask for them rather than get them by default.
+            if badge_cfg is not None and badge_cfg.enabled:
+                base = badge_cfg.api_base
+                for player_id, handles in seen_players.items():
+                    per_handle: list[list[scraper.BadgeState]] = []
+                    for handle in handles:
+                        await asyncio.sleep(random.uniform(jitter_lo, jitter_hi))
+                        try:
+                            per_handle.append(
+                                await scraper.fetch_badges(
+                                    handle,
+                                    session=session,
+                                    base=base,
+                                    timeout=poll_cfg.request_timeout_sec,
+                                )
+                            )
+                        except Exception as e:
+                            # Badges come from a third party's proxy, so they are
+                            # the least reliable leg of the poll and must never
+                            # take the scores down — those are already committed.
+                            counters["badges_errors"] += 1
+                            log.warning(
+                                "badge fetch failed handle=%s err=%s", handle, e
+                            )
+                    if not per_handle:
+                        continue
+                    try:
+                        got = persist_badges(
+                            conn, player_id, scraper.combine_badges(per_handle)
+                        )
+                    except Exception:
+                        counters["badges_errors"] += 1
+                        log.exception("badge persist failed player=%s", player_id)
+                        continue
+                    counters["badges_fetched"] += 1
+                    counters["badges_newly_earned"] += got["newly_earned"]
 
             for location_id, loc in seen_locations.items():
                 if not loc["rooms"]:
@@ -223,8 +275,9 @@ def persist_snapshot(
             INSERT INTO score_snapshots
                 (player_id, location_id, polled_at, total_score, yearly_score,
                  player_rank, leaderboard_position, yearly_rank, stars, coins,
-                 levels_beat, level_count, raw_scores_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 levels_beat, level_count, badges_earned, badges_possible,
+                 raw_scores_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 player_id,
@@ -243,6 +296,7 @@ def persist_snapshot(
                 result.coins,
                 result.levels_beat,
                 result.level_count,
+                *scraper.badges_from_trophy_progress(result.trophy_progress),
                 json.dumps(result.scores),
             ),
         )
@@ -259,6 +313,96 @@ def persist_snapshot(
             return True
 
     return False
+
+
+def persist_badges(
+    conn: sqlite3.Connection,
+    player_id: int,
+    states: list[scraper.BadgeState],
+    *,
+    now: datetime | None = None,
+) -> dict[str, int]:
+    """Upsert one player's badges. Returns counts for logging.
+
+    The badge API restates the whole catalog every call, so `badges` is
+    refreshed from it rather than fetched separately.
+
+    `earned_on` is stamped only on an observed false→true transition, and dated
+    `streak.activity_day` — the same one-day backdate the visit rows get, for the
+    same reason: Activate's data refreshes about a day late, so a badge first
+    seen earned in today's poll was earned yesterday. Sharing that helper is what
+    stops a badge and the visit from the same session disagreeing about the date.
+
+    On a player's *first* poll there is no transition to observe — everything
+    already earned was earned at some unknown past date, so it is left NULL
+    rather than backdated to today, which would be a fabricated date.
+    """
+    now = now or datetime.now(timezone.utc)
+    updated_at = now.isoformat(timespec="seconds")
+    earned_day = streak.activity_day(now).isoformat()
+
+    newly_earned = 0
+    with transaction(conn):
+        prior = {
+            r["badge_id"]: r
+            for r in conn.execute(
+                "SELECT badge_id, earned, earned_on FROM player_badges WHERE player_id = ?",
+                (player_id,),
+            ).fetchall()
+        }
+        backfill = not prior
+
+        for s in states:
+            conn.execute(
+                """
+                INSERT INTO badges
+                    (badge_id, name, description, stars, first_seen, last_seen)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(badge_id) DO UPDATE SET
+                    name        = excluded.name,
+                    description = excluded.description,
+                    stars       = excluded.stars,
+                    last_seen   = excluded.last_seen
+                """,
+                (s.badge_id, s.name, s.description, s.stars, updated_at, updated_at),
+            )
+
+            was = prior.get(s.badge_id)
+            if not s.earned or (was is not None and was["earned"]):
+                # Not earned, or earned long since — carry any date forward.
+                # Never cleared: an earned_on we once observed stays observed.
+                earned_on = was["earned_on"] if was else None
+            elif backfill:
+                earned_on = None
+            else:
+                earned_on = earned_day
+                newly_earned += 1
+
+            conn.execute(
+                """
+                INSERT INTO player_badges
+                    (player_id, badge_id, earned, progress, total_progress,
+                     earned_on, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(player_id, badge_id) DO UPDATE SET
+                    earned         = excluded.earned,
+                    progress       = excluded.progress,
+                    total_progress = excluded.total_progress,
+                    earned_on      = excluded.earned_on,
+                    updated_at     = excluded.updated_at
+                """,
+                (
+                    player_id,
+                    s.badge_id,
+                    1 if s.earned else 0,
+                    s.progress,
+                    s.total_progress,
+                    earned_on,
+                    updated_at,
+                ),
+            )
+
+    return {"badges": len(states), "newly_earned": newly_earned}
 
 
 def player_locations_for_admin(conn: sqlite3.Connection) -> Iterable[sqlite3.Row]:

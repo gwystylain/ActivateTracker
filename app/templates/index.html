@@ -43,6 +43,7 @@
                 <th>Visits this year</th>
                 <th>Leaderboard position</th>
                 <th>Levels beat</th>
+                <th>Badges</th>
             </tr>
         </thead>
         <tbody>
@@ -64,6 +65,11 @@
                     {%- else %}{{ p.levels_beat }}{% if p.level_count %} <span class="muted small">/ {{ p.level_count }}</span>{% endif %}
                     {%- endif %}
                 </td>
+                <td>
+                    {%- if p.badges_earned is none %}&mdash;
+                    {%- else %}<a href="/badges">{{ p.badges_earned }}</a>{% if p.badges_possible %} <span class="muted small">/ {{ p.badges_possible }}</span>{% endif %}
+                    {%- endif %}
+                </td>
             </tr>
             {% for loc in p.locations %}
             <tr class="loc-row" data-player="{{ p.id }}">
@@ -80,13 +86,16 @@
                     {%- else %}{{ loc.levels_beat }}{% if loc.level_count %} <span class="muted small">/ {{ loc.level_count }}</span>{% endif %}
                     {%- endif %}
                 </td>
+                {# Badges are per player, not per location — the count would be
+                   the same number repeated, so the breakdown leaves it blank. #}
+                <td></td>
             </tr>
             {% endfor %}
             {% endfor %}
         </tbody>
     </table>
     </div>
-    <p class="muted small">As of {{ today }} (UTC). Click a player to see a per-location breakdown. Discount stamp cards are per location, based on visits to that location in the last 30 days: 1 visit = 10% off, 2 = 15%, 3 = 20%, 4 or more = 25%. Leaderboard position is the number Activate states on that location's page as &ldquo;Your Leaderboard Position&rdquo;. A player's headline discount is their best location, their headline leaderboard position is their best (lowest) location, and headline levels beat is their highest location.</p>
+    <p class="muted small">As of {{ today }} (UTC). Click a player to see a per-location breakdown. Discount stamp cards are per location, based on visits to that location in the last 30 days: 1 visit = 10% off, 2 = 15%, 3 = 20%, 4 or more = 25%. Leaderboard position is the number Activate states on that location's page as &ldquo;Your Leaderboard Position&rdquo;. A player's headline discount is their best location, their headline leaderboard position is their best (lowest) location, and headline levels beat is their highest location. Badges are the exception: they transfer between locations, so the count is one number for the player and the per-location rows leave it blank &mdash; see <a href="/badges">Badges</a>.</p>
 </section>
 {% endif %}
 

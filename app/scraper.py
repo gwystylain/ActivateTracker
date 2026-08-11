@@ -22,6 +22,14 @@ ROOM_URL = (
     "https://playactivate.com/scores/{handle}/{location_id}/{slug}/{room}/scores"
 )
 
+# Badges live nowhere on the score pages above — the site shows them only on the
+# in-store score-checker iPad. This is a community-run proxy in front of an
+# official Activate badge API (a bad handle comes back as
+# {"error": "Activate API returned 500"}), public and unauthenticated, keyed on
+# the handle alone. Overridable via config so pointing at the upstream directly,
+# if its URL ever becomes known, is a config edit rather than a code change.
+BADGE_API_BASE = "https://api.ryflix.ca/api/badges"
+
 # Chrome TLS-fingerprint profile passed to curl_cffi. Required because
 # playactivate.com (Cloudflare) rejects non-browser TLS handshakes with 403.
 IMPERSONATE = "chrome124"
@@ -67,6 +75,34 @@ class ScrapeResult:
     # location.rooms — [{"id": 10, "name": "Hoops"}, ...]. The rooms this
     # location has, which is what drives catalog refresh (see app/catalog.py).
     rooms: tuple[dict[str, Any], ...] = ()
+    # playerLocation.trophyProgress — {tier: {progress, requiredBadges}} for
+    # bronze/silver/gold/platinum. The page's own badge tally, which corroborates
+    # the badge API's (see `badges_from_trophy_progress`). Absent on older
+    # captures — the committed langley fixture predates the field entirely.
+    trophy_progress: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class BadgeState:
+    """One badge for one player, as the badge API reports it.
+
+    `badge_id` is Activate's own id and the only safe key: the API returns 118
+    badges under 117 distinct names, because "Untouchable 5.0" is two different
+    badges (id 111 Piperooni, id 125 Wormholes). Note that the community badge
+    trackers use their *own* id space, which does not line up with this one —
+    joining anything of theirs by id silently mismatches most rows.
+    """
+
+    badge_id: int
+    name: str
+    description: str
+    earned: bool
+    # How far along an unearned badge is. `total_progress` is 0 for the four
+    # badges with no denominator (Completionist, Halfway Mark, Activated, The
+    # Grand Tour), where `progress` is a bare running count — never divide by it.
+    progress: int
+    total_progress: int
+    stars: int | None  # the badge's own star value, unrelated to profile stars
 
 
 @dataclass(frozen=True)
@@ -213,7 +249,130 @@ def parse_html(html: str, *, handle: str, location_id: int, slug: str) -> Scrape
         levels_beat=sum(1 for s in clean_scores if s["highScore"] > 0),
         level_count=_int_or_none(location.get("levelCount")),
         rooms=_clean_rooms(location.get("rooms")),
+        trophy_progress=(
+            tp if isinstance(tp := player_loc.get("trophyProgress"), dict) else None
+        ),
     )
+
+
+def badges_from_trophy_progress(raw: Any) -> tuple[int | None, int | None]:
+    """(badges earned, badges possible here) from the page's trophyProgress.
+
+    The site states each trophy tier as a fraction of its threshold rather than
+    a count: bronze 0.44 of 25, silver 0.22 of 50, gold 0.15 of 75, platinum
+    0.09 of 118 all describe the same 11 badges. Platinum's threshold is the
+    number of badges attainable *at that location* — badges needing a room the
+    location lacks are excluded — so it doubles as the denominator.
+
+    `progress` is rounded to 2dp, so a tier recovers the count to only
+    ±0.005×threshold. Reading the smallest threshold still below 1.0 keeps that
+    under ±0.375 and so exactly roundable up to 75 badges; past gold only
+    platinum's threshold is left and the count can be off by one. Nothing else
+    in the app depends on it being exact — it is the corroborating number, and
+    `player_badges` holds the enumerated truth.
+    """
+    if not isinstance(raw, dict):
+        return (None, None)
+
+    tiers: list[tuple[int, float]] = []
+    for rec in raw.values():
+        if not isinstance(rec, dict):
+            continue
+        required = _int_or_none(rec.get("requiredBadges"))
+        progress = rec.get("progress")
+        if required is None or required <= 0 or not isinstance(progress, (int, float)):
+            continue
+        tiers.append((required, float(progress)))
+
+    if not tiers:
+        return (None, None)
+
+    unfinished = sorted(t for t in tiers if t[1] < 1.0)
+    required, progress = unfinished[0] if unfinished else max(tiers)
+    return (round(progress * required), max(t[0] for t in tiers))
+
+
+def parse_badges(payload: Any) -> list[BadgeState]:
+    """Badge states from the badge API's JSON array.
+
+    Split from `fetch_badges` so it can be exercised against a saved payload
+    with no network, the way `parse_html` is.
+    """
+    if isinstance(payload, dict) and payload.get("error"):
+        raise FetchError(f"badge API error: {payload['error']}")
+    if not isinstance(payload, list):
+        raise ScrapeError(f"badge payload is {type(payload).__name__}, expected a list")
+
+    # Keyed rather than appended: a duplicate id would otherwise inflate the
+    # "possible" count while collapsing to one row on insert.
+    states: dict[int, BadgeState] = {}
+    for b in payload:
+        if not isinstance(b, dict):
+            continue
+        badge_id = _int_or_none(b.get("id"))
+        if badge_id is None:
+            continue
+        states[badge_id] = BadgeState(
+            badge_id=badge_id,
+            name=str(b.get("name") or f"badge-{badge_id}"),
+            description=str(b.get("description") or ""),
+            earned=bool(b.get("status")),
+            progress=_int_or_none(b.get("progress")) or 0,
+            total_progress=_int_or_none(b.get("totalProgress")) or 0,
+            stars=_int_or_none(b.get("stars")),
+        )
+    return [states[k] for k in sorted(states)]
+
+
+async def fetch_badges(
+    handle: str,
+    *,
+    session: AsyncSession,
+    base: str = BADGE_API_BASE,
+    timeout: float = 20.0,
+) -> list[BadgeState]:
+    """Every badge applicable to `handle`, earned or not.
+
+    Per player, not per location: the endpoint takes only a handle, and badges
+    transfer between Activate locations where scores and rank do not.
+    """
+    url = f"{base.rstrip('/')}/activate-sync/{quote(handle, safe='')}"
+    log.info("fetch badges url=%s", url)
+    resp = await session.get(url, impersonate=IMPERSONATE, timeout=timeout)
+    if resp.status_code >= 400:
+        raise FetchError(f"HTTP {resp.status_code} for {url}")
+    try:
+        payload = resp.json()
+    except ValueError as e:
+        raise ScrapeError(f"badge response is not valid JSON: {e}") from e
+    return parse_badges(payload)
+
+
+def combine_badges(per_handle: list[list[BadgeState]]) -> list[BadgeState]:
+    """Merge one multi-handle player's badge lists into a single set.
+
+    A badge counts as earned if *any* of the player's profiles has it, and an
+    unearned badge takes the furthest progress of any profile. Summing progress
+    would invent a number no account actually holds — the same reason
+    `combine_results` picks the best rank rather than averaging.
+    """
+    merged: dict[int, BadgeState] = {}
+    for states in per_handle:
+        for s in states:
+            prior = merged.get(s.badge_id)
+            if prior is None:
+                merged[s.badge_id] = s
+                continue
+            merged[s.badge_id] = BadgeState(
+                badge_id=s.badge_id,
+                name=prior.name,
+                description=prior.description,
+                earned=prior.earned or s.earned,
+                progress=max(prior.progress, s.progress),
+                total_progress=max(prior.total_progress, s.total_progress),
+                stars=prior.stars if prior.stars is not None else s.stars,
+            )
+    return [merged[k] for k in sorted(merged)]
 
 
 def _clean_rooms(raw: Any) -> tuple[dict[str, Any], ...]:
@@ -404,4 +563,13 @@ def combine_results(results: list[ScrapeResult]) -> ScrapeResult:
         levels_beat=sum(1 for s in scores if s["highScore"] > 0),
         level_count=base.level_count,
         rooms=base.rooms,
+        # Badges belong to an Activate account, and two of the player's accounts
+        # hold overlapping sets, so the tally that means something is the best
+        # single account's — not a sum, which no account would recognise. Same
+        # pick-don't-blend rule as the ranks above.
+        trophy_progress=max(
+            (r.trophy_progress for r in results if r.trophy_progress is not None),
+            key=lambda tp: badges_from_trophy_progress(tp)[0] or 0,
+            default=None,
+        ),
     )

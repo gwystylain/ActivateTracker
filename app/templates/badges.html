@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}Badges · activateTracker{% endblock %}
+{% block content %}
+{% if has_badges %}
+<section class="card">
+    <div class="card-header">
+        <h1>Badges</h1>
+        <div class="header-actions">
+            {% if logged_in %}
+                <form method="post" action="/admin/refresh" class="inline">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit">Refresh now</button>
+                </form>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="table-wrap">
+        <table class="data badge-summary">
+            <thead>
+                <tr>
+                    <th>Player</th>
+                    <th>Badges</th>
+                    <th>Trophy</th>
+                    <th>Next trophy</th>
+                    <th>Stars from badges</th>
+                    <th>As of</th>
+                </tr>
+            </thead>
+            <tbody id="summaryBody"></tbody>
+        </table>
+    </div>
+    <p class="muted small" id="summaryNote"></p>
+
+    <div class="filters">
+        <label class="inline-field">
+            <span>Show</span>
+            <select id="stateFilter">
+                <option value="">All badges</option>
+                <option value="unearned">Not yet earned</option>
+                <option value="earned">Earned</option>
+                <option value="nobody">Nobody has it</option>
+            </select>
+        </label>
+        <label class="inline-field">
+            <span>Room</span>
+            <select id="roomFilter"><option value="">All rooms</option></select>
+        </label>
+        <label class="inline-field">
+            <span>Difficulty</span>
+            <select id="difficultyFilter"><option value="">Any difficulty</option></select>
+        </label>
+        <label class="inline-field">
+            <span>Search</span>
+            <input type="search" id="badgeSearch" placeholder="name, description or tip">
+        </label>
+        <label class="inline-field checkbox">
+            <input type="checkbox" id="hereOnly">
+            <span>Hide badges with no room at my locations</span>
+        </label>
+    </div>
+
+    <fieldset class="players-filter">
+        <legend>Players</legend>
+        <div id="playerFilter" class="player-checks"></div>
+    </fieldset>
+
+    <p class="muted small" id="badgesStatus">Loading…</p>
+</section>
+
+<section class="card" id="closeCard" hidden>
+    <details class="card-panel" open>
+        <summary><h2>Closest to earning</h2></summary>
+        <p class="muted small">
+            Badges Activate is already counting progress towards, ranked by how far
+            along they are. Only badges with a target show here &mdash; a few
+            (Activated, Halfway Mark, Completionist, The Grand Tour) report a running
+            count with no total, so there is no fraction to rank them by.
+        </p>
+        <div class="table-wrap">
+            <table class="data badge-close">
+                <thead>
+                    <tr>
+                        <th>Player</th>
+                        <th>Badge</th>
+                        <th>Progress</th>
+                        <th>Left</th>
+                    </tr>
+                </thead>
+                <tbody id="closeBody"></tbody>
+            </table>
+        </div>
+        <p class="muted small" id="closeNote"></p>
+    </details>
+</section>
+
+<section class="card" id="gridCard" hidden>
+    <h2>Who has what</h2>
+    <div class="table-wrap">
+        <table class="data badge-grid" id="gridTable">
+            <thead id="gridHead"></thead>
+            <tbody id="gridBody"></tbody>
+        </table>
+    </div>
+    <p class="muted small">
+        Click a badge for its room, difficulty, tips, and the hint and answer where
+        it is an Easter Egg or Riddle. Hover an underlined name
+        for what the badge takes. A date is the day we first saw it earned, backdated
+        one day the same way visits are, because Activate's scores refresh about a day
+        late. A tick with no date was already earned when the player was first polled
+        &mdash; that badge's real date is not something Activate tells us.
+    </p>
+    <p class="muted small">
+        Room, difficulty, players and tips come from the community
+        <em>Activate Games Master Document</em> and the badge tracker at
+        activate.ryflix.ca, not from Activate. <strong>Where</strong> is a weak
+        negative: the room list behind it is each location's <em>scoring</em> rooms,
+        so the photo room is missing everywhere, and badges transfer between
+        locations &mdash; one earned at a venue you don't track still counts.
+    </p>
+</section>
+{% else %}
+<section class="card">
+    <h1>Badges</h1>
+    <p class="muted">
+        No badge data yet. Badges arrive with the next refresh
+        {%- if logged_in %} &mdash; run one from <a href="/admin">Admin</a>{% endif %}.
+    </p>
+</section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if has_badges %}
+<script src="/static/badges.js?v={{ static_v('badges.js') }}"></script>
+{% endif %}
+{% endblock %}

@@ -4,9 +4,9 @@ import pytest
 
 from app import db as db_mod
 from app import poller as poller_mod
-from app.config import PollConfig
+from app.config import BadgeConfig, PollConfig
 from app.poller import format_handles, parse_handles, persist_snapshot
-from app.scraper import ScrapeResult
+from app.scraper import BadgeState, ScrapeResult
 
 
 def _conn(tmp_path):
@@ -309,3 +309,197 @@ def test_cascade_delete_removes_snapshots_and_visits(tmp_path):
     assert snaps == 0
     assert visits == 0
     assert locs == 0
+
+
+# ---------- badges ----------
+
+def _states(*specs):
+    """(id, earned) pairs -> BadgeState list, with a 0/25 progress target."""
+    return [
+        BadgeState(
+            badge_id=bid,
+            name=f"Badge {bid}",
+            description=f"do thing {bid}",
+            earned=earned,
+            progress=25 if earned else 4,
+            total_progress=25,
+            stars=5,
+        )
+        for bid, earned in specs
+    ]
+
+
+def test_a_first_poll_records_badges_without_inventing_a_date(tmp_path):
+    """Everything already earned was earned at some unknown past date. Stamping
+    today would be a fabricated date on every one of them."""
+    conn = _conn(tmp_path)
+    pid = _insert_player(conn)
+
+    got = poller_mod.persist_badges(
+        conn, pid, _states((1, True), (2, True), (3, False)),
+        now=datetime(2026, 8, 11, 11, 0, tzinfo=timezone.utc),
+    )
+
+    assert got == {"badges": 3, "newly_earned": 0}
+    rows = conn.execute(
+        "SELECT badge_id, earned, earned_on FROM player_badges ORDER BY badge_id"
+    ).fetchall()
+    assert [r["earned"] for r in rows] == [1, 1, 0]
+    assert all(r["earned_on"] is None for r in rows)
+
+
+def test_earning_a_badge_dates_it_the_day_before_the_poll(tmp_path):
+    """Same one-day backdate the visit rows get: Activate's data refreshes a day
+    late, so a badge first seen in Tuesday's poll was earned on Monday."""
+    conn = _conn(tmp_path)
+    pid = _insert_player(conn)
+    poller_mod.persist_badges(
+        conn, pid, _states((1, False)),
+        now=datetime(2026, 8, 10, 11, 0, tzinfo=timezone.utc),
+    )
+
+    got = poller_mod.persist_badges(
+        conn, pid, _states((1, True)),
+        now=datetime(2026, 8, 11, 11, 0, tzinfo=timezone.utc),
+    )
+
+    assert got["newly_earned"] == 1
+    row = conn.execute("SELECT earned, earned_on FROM player_badges").fetchone()
+    assert (row["earned"], row["earned_on"]) == (1, "2026-08-10")
+
+
+def test_a_later_poll_does_not_restamp_a_badge_already_earned(tmp_path):
+    conn = _conn(tmp_path)
+    pid = _insert_player(conn)
+    for day in (10, 11):
+        poller_mod.persist_badges(
+            conn, pid, _states((1, day > 10)),
+            now=datetime(2026, 8, day, 11, 0, tzinfo=timezone.utc),
+        )
+
+    got = poller_mod.persist_badges(
+        conn, pid, _states((1, True)),
+        now=datetime(2026, 8, 20, 11, 0, tzinfo=timezone.utc),
+    )
+
+    assert got["newly_earned"] == 0
+    assert conn.execute("SELECT earned_on FROM player_badges").fetchone()[0] == "2026-08-10"
+
+
+def test_the_catalog_follows_whatever_the_api_last_said(tmp_path):
+    """The badge list is restated in full on every call, so `badges` is a mirror
+    of upstream rather than something we accumulate."""
+    conn = _conn(tmp_path)
+    pid = _insert_player(conn)
+    poller_mod.persist_badges(conn, pid, _states((1, False)))
+
+    renamed = [
+        BadgeState(1, "Renamed", "new wording", False, 4, 25, 10),
+    ]
+    poller_mod.persist_badges(conn, pid, renamed)
+
+    row = conn.execute("SELECT name, description, stars FROM badges").fetchone()
+    assert (row["name"], row["description"], row["stars"]) == ("Renamed", "new wording", 10)
+
+
+def test_snapshot_carries_the_page_s_own_badge_tally(tmp_path):
+    conn = _conn(tmp_path)
+    pid = _insert_player(conn)
+    result = ScrapeResult(**{
+        **_result(500).__dict__,
+        "trophy_progress": {
+            "bronze": {"progress": 0.44, "requiredBadges": 25},
+            "platinum": {"progress": 0.09, "requiredBadges": 118},
+        },
+    })
+
+    persist_snapshot(conn, pid, result)
+
+    row = conn.execute(
+        "SELECT badges_earned, badges_possible FROM score_snapshots"
+    ).fetchone()
+    assert (row["badges_earned"], row["badges_possible"]) == (11, 118)
+
+
+def test_a_page_without_trophy_progress_leaves_the_tally_null(tmp_path):
+    conn = _conn(tmp_path)
+    pid = _insert_player(conn)
+    persist_snapshot(conn, pid, _result(500))
+
+    row = conn.execute(
+        "SELECT badges_earned, badges_possible FROM score_snapshots"
+    ).fetchone()
+    assert (row["badges_earned"], row["badges_possible"]) == (None, None)
+
+
+async def test_badges_are_fetched_once_per_handle_not_once_per_location(tmp_path, monkeypatch):
+    """The badge endpoint takes only a handle. A player at two locations must
+    not cost two identical badge requests."""
+    conn = _conn(tmp_path)
+    pid = _insert_player(conn)
+    conn.execute(
+        "INSERT INTO player_locations (player_id, location_id, slug)"
+        " VALUES (?, 38, 'coquitlam')",
+        (pid,),
+    )
+    _wire_poll(monkeypatch, {"gmebagholder": 100})
+    asked = []
+
+    async def fake_badges(handle, *, session, base, timeout):
+        asked.append(handle)
+        return _states((1, True), (2, False))
+
+    monkeypatch.setattr(poller_mod.scraper, "fetch_badges", fake_badges)
+
+    counters = await poller_mod.poll_all(
+        conn, PollConfig(jitter_seconds=(0.0, 0.0)), badge_cfg=BadgeConfig()
+    )
+
+    assert asked == ["gmebagholder"]          # two locations, one badge fetch
+    assert counters["polled"] == 2            # but both locations still scored
+    assert counters["badges_fetched"] == 1
+    assert conn.execute("SELECT COUNT(*) FROM player_badges").fetchone()[0] == 2
+
+
+async def test_a_badge_failure_does_not_fail_the_score_poll(tmp_path, monkeypatch):
+    """Badges come from a third party's proxy — the least reliable leg of the
+    poll, and the one the scores must not depend on."""
+    conn = _conn(tmp_path)
+    _insert_player(conn)
+    _wire_poll(monkeypatch, {"gmebagholder": 100})
+
+    async def boom(handle, *, session, base, timeout):
+        raise RuntimeError("proxy down")
+
+    monkeypatch.setattr(poller_mod.scraper, "fetch_badges", boom)
+
+    counters = await poller_mod.poll_all(
+        conn, PollConfig(jitter_seconds=(0.0, 0.0)), badge_cfg=BadgeConfig()
+    )
+
+    assert counters["badges_errors"] == 1
+    assert counters["badges_fetched"] == 0
+    assert counters["polled"] == 1            # scores landed anyway
+    assert conn.execute("SELECT COUNT(*) FROM score_snapshots").fetchone()[0] == 1
+
+
+async def test_badges_are_skipped_without_a_config(tmp_path, monkeypatch):
+    """Opt-in: the one leg that leaves playactivate.com is never taken by
+    default, so a caller can't reach a third party by omission."""
+    conn = _conn(tmp_path)
+    _insert_player(conn)
+    _wire_poll(monkeypatch, {"gmebagholder": 100})
+
+    async def boom(handle, **kw):
+        raise AssertionError("badges must not be fetched without a config")
+
+    monkeypatch.setattr(poller_mod.scraper, "fetch_badges", boom)
+
+    counters = await poller_mod.poll_all(conn, PollConfig(jitter_seconds=(0.0, 0.0)))
+    assert counters["badges_fetched"] == 0
+    assert counters["badges_errors"] == 0
+
+    await poller_mod.poll_all(
+        conn, PollConfig(jitter_seconds=(0.0, 0.0)),
+        badge_cfg=BadgeConfig(enabled=False),
+    )

@@ -6,6 +6,7 @@ from app import db as db_mod
 from app.routes.public import (
     _build_player_summaries,
     _build_records,
+    badge_data,
     chart_data,
     game_data,
 )
@@ -475,3 +476,221 @@ def test_summary_ignores_locations_with_null_columns(tmp_path):
     by_name = {loc["name"]: loc for loc in p["locations"]}
     assert by_name["Langley"]["position"] is None   # NULL stays an em dash
     assert by_name["Coquitlam"]["position"] == 138
+
+
+# ---------- badges ----------
+
+async def _badges(conn):
+    """badge_data only touches request.app.state.db, so a stub stands in."""
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=conn)))
+    return json.loads((await badge_data(request)).body)
+
+
+def _seed_badges(conn, pid, *specs, earned_on=None):
+    """(badge_id, earned, progress, total) tuples."""
+    for bid, earned, progress, total in specs:
+        conn.execute(
+            "INSERT OR IGNORE INTO badges (badge_id, name, description, stars,"
+            " first_seen, last_seen)"
+            " VALUES (?, ?, ?, 5, '2026-08-01T00:00:00', '2026-08-01T00:00:00')",
+            (bid, f"Badge {bid}", f"do thing {bid}"),
+        )
+        conn.execute(
+            "INSERT INTO player_badges (player_id, badge_id, earned, progress,"
+            " total_progress, earned_on, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, '2026-08-03T00:00:00')",
+            (pid, bid, 1 if earned else 0, progress, total, earned_on),
+        )
+
+
+async def test_badge_data_is_an_empty_shape_when_nothing_is_polled(tmp_path):
+    """Same keys, empty values — the page never has to branch on "no data"."""
+    payload = await _badges(_conn(tmp_path))
+    assert payload == {"players": [], "badges": [], "states": {}, "locations": []}
+
+
+async def test_badge_data_reports_counts_and_the_trophy_earned(tmp_path):
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _seed_badges(conn, pid, *[(i, i <= 26, 1, 1) for i in range(1, 119)])
+
+    payload = await _badges(conn)
+    p = payload["players"][0]
+
+    assert (p["earned"], p["possible"]) == (26, 118)
+    assert p["tier"] == "bronze"                     # 25 earns it, 50 is next
+    assert (p["next_tier"], p["to_next"]) == ("silver", 24)
+    assert len(payload["badges"]) == 118
+
+
+async def test_a_trophy_the_location_cannot_offer_is_not_dangled(tmp_path):
+    """40 badges exist here, so silver's 50 is unreachable — the next trophy
+    within reach is platinum, all 40 of them."""
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _seed_badges(conn, pid, *[(i, i <= 26, 1, 1) for i in range(1, 41)])
+
+    p = (await _badges(conn))["players"][0]
+    assert p["tier"] == "bronze"
+    assert (p["next_tier"], p["to_next"]) == ("platinum", 14)
+
+
+async def test_platinum_is_every_badge_the_location_offers_not_a_fixed_count(tmp_path):
+    """"100% of badges, not 100 badges" — and how many that is depends on which
+    rooms the location has."""
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _seed_badges(conn, pid, *[(i, True, 1, 1) for i in range(1, 31)])
+
+    p = (await _badges(conn))["players"][0]
+    assert (p["earned"], p["possible"]) == (30, 30)
+    assert (p["tier"], p["next_tier"]) == ("platinum", None)
+
+
+async def test_the_page_s_own_tally_rides_along_rather_than_being_reconciled(tmp_path):
+    """Two endpoints, two answers. A disagreement is worth seeing, so both are
+    sent and neither overwrites the other."""
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _seed_badges(conn, pid, (1, True, 1, 1), (2, False, 0, 1))
+    conn.execute(
+        "INSERT INTO score_snapshots (player_id, location_id, polled_at, total_score,"
+        " yearly_score, badges_earned, badges_possible, raw_scores_json)"
+        " VALUES (?, 72, '2026-08-03T00:00:00', 1, 0, 7, 118, '[]')",
+        (pid,),
+    )
+
+    p = (await _badges(conn))["players"][0]
+    assert p["earned"] == 1                # what we enumerated
+    assert p["reported_earned"] == 7       # what the score page said
+    assert p["reported_possible"] == 118
+
+
+async def test_a_player_never_polled_for_badges_is_absent_not_zeroed(tmp_path):
+    """Nothing recorded is not the same claim as "has no badges"."""
+    conn = _conn(tmp_path)
+    seen = _seed_player(conn)
+    _seed_player(conn, handle="kavo")
+    _seed_badges(conn, seen, (1, True, 1, 1))
+
+    payload = await _badges(conn)
+    assert [p["id"] for p in payload["players"]] == [seen]
+    assert set(payload["states"]) == {str(seen)}
+
+
+async def test_hidden_players_are_left_out(tmp_path):
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _seed_badges(conn, pid, (1, True, 1, 1))
+    conn.execute("UPDATE players SET hidden = 1 WHERE id = ?", (pid,))
+
+    assert (await _badges(conn))["players"] == []
+
+
+async def test_progress_and_earned_dates_survive_the_round_trip(tmp_path):
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _seed_badges(conn, pid, (1, True, 25, 25), earned_on="2026-08-02")
+    _seed_badges(conn, pid, (2, False, 12, 25))
+    _seed_badges(conn, pid, (3, False, 159, 0))   # the no-denominator kind
+
+    states = (await _badges(conn))["states"][str(pid)]
+    assert states["1"] == {
+        "earned": True, "progress": 25, "total_progress": 25,
+        "earned_on": "2026-08-02",
+    }
+    assert states["2"]["progress"] == 12
+    # Sent as-is: the front end is what decides a 0 total means "no bar", and
+    # nothing on the way here may divide by it.
+    assert states["3"]["total_progress"] == 0
+
+
+def test_summary_badge_column_counts_once_for_the_player(tmp_path):
+    """Badges transfer between locations, so the count belongs to the player and
+    must not be repeated per location the way levels beat is."""
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _seed_badges(conn, pid, (1, True, 1, 1), (2, True, 1, 1), (3, False, 0, 1))
+
+    row = _build_player_summaries(conn, today=TODAY)[0]
+    assert (row["badges_earned"], row["badges_possible"]) == (2, 3)
+    assert len(row["locations"]) == 2
+    assert all("badges_earned" not in loc for loc in row["locations"])
+
+
+def test_summary_badge_column_is_none_when_never_polled(tmp_path):
+    conn = _conn(tmp_path)
+    _seed_player(conn)
+    row = _build_player_summaries(conn, today=TODAY)[0]
+    assert (row["badges_earned"], row["badges_possible"]) == (None, None)
+
+
+async def test_badge_data_carries_the_community_detail(tmp_path):
+    """Merged at the API boundary like the gamemode rules on /games, and keyed
+    on name *and* description, so the two Untouchable 5.0 badges keep their own
+    rooms instead of both getting whichever came first."""
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    for bid, name, desc in (
+        (111, "Untouchable 5.0", "Win level 5 of Piperooni without losing a life"),
+        (125, "Untouchable 5.0", "Win level 5 of Wormholes without losing a life"),
+    ):
+        conn.execute(
+            "INSERT INTO badges (badge_id, name, description, stars, first_seen,"
+            " last_seen) VALUES (?, ?, ?, 10, '2026-08-01', '2026-08-01')",
+            (bid, name, desc),
+        )
+        conn.execute(
+            "INSERT INTO player_badges (player_id, badge_id, earned, progress,"
+            " total_progress, updated_at) VALUES (?, ?, 0, 0, 1, '2026-08-03')",
+            (pid, bid),
+        )
+
+    by_id = {b["badge_id"]: b for b in (await _badges(conn))["badges"]}
+
+    assert by_id[111]["rooms"] == ["Pipes"]
+    assert by_id[125]["rooms"] == ["Portals"]
+    assert by_id[111]["difficulty"] == "Hard"
+
+
+async def test_badge_data_sends_each_location_s_rooms(tmp_path):
+    """So the page can say where a badge is obtainable. The locations really do
+    differ, which is the only reason it's worth saying."""
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    conn.execute(
+        "INSERT INTO badges (badge_id, name, description, stars, first_seen,"
+        " last_seen) VALUES (1, 'X', 'x', 5, '2026-08-01', '2026-08-01')"
+    )
+    conn.execute(
+        "INSERT INTO player_badges (player_id, badge_id, earned, progress,"
+        " total_progress, updated_at) VALUES (?, 1, 0, 0, 1, '2026-08-03')",
+        (pid,),
+    )
+    conn.executemany(
+        "INSERT INTO location_games (location_id, room_id, room_name, room_order,"
+        " game_id, game_name, game_order, levels_json)"
+        " VALUES (?, ?, ?, 0, ?, 'g', 0, '[0]')",
+        [(72, 1, "Pipes", 101), (38, 2, "Portals", 201)],
+    )
+
+    locations = {l["name"]: l["rooms"] for l in (await _badges(conn))["locations"]}
+    assert locations == {"Langley": ["Pipes"], "Coquitlam": ["Portals"]}
+
+
+async def test_a_location_with_no_catalog_is_left_out_of_the_rooms_list(tmp_path):
+    """An empty room list would read as "this location has no rooms", which the
+    page would turn into "you can't get this here"."""
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    conn.execute(
+        "INSERT INTO badges (badge_id, name, description, stars, first_seen,"
+        " last_seen) VALUES (1, 'X', 'x', 5, '2026-08-01', '2026-08-01')"
+    )
+    conn.execute(
+        "INSERT INTO player_badges (player_id, badge_id, earned, progress,"
+        " total_progress, updated_at) VALUES (?, 1, 0, 0, 1, '2026-08-03')",
+        (pid,),
+    )
+
+    assert (await _badges(conn))["locations"] == []

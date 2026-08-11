@@ -107,6 +107,13 @@ walks braces (handling escaped quotes in strings); `_extract_json_value` does th
 for the room page's `roomInfo` / `roomGames` / `roomScores`, generalised to `[...]` values. If the
 site's hydration shape changes, these fixtures and the anchor regex are the canary.
 
+`tests/fixtures/badges_gmebagholder.json` is a live capture of the badge API's 118-row
+response. The langley HTML capture is old enough to predate `trophyProgress` while the
+coquitlam one has it — that pair differs in *both* capture date and page type, so it
+cannot settle where the field lives. A live poll settled it: both a location page and a
+room page return it, so it rides every poll. Anything relying on that should still tolerate
+its absence, which is what the langley fixture is now pinning.
+
 ### Schema is bootstrapped, not migrated
 `db.init_schema` runs `CREATE TABLE IF NOT EXISTS ...` on every startup. There is no migration
 framework. Adding a column to an existing table means adding it to `SCHEMA` *and* to `db._migrate`
@@ -240,6 +247,110 @@ shuffle when a location happens to catalogue no 4-player gamemode, and **Not rec
 them: without it, ticking any box would hide the 13 unrecorded gamemodes with no way back. In the
 level breakdown the expanded level rows leave the cell empty — the count belongs to the gamemode,
 not to each of its levels.
+
+### Badges: counted by the score page, enumerated by a third party
+The score pages carry no badge list — the site shows badges only on the in-store
+score-checker iPad, and emails them per session. Two different sources fill that in,
+and the app keeps them apart on purpose.
+
+**The count** comes free from the page we already fetch. `playerLocation.trophyProgress`
+states four tier fractions (`{tier: {progress, requiredBadges}}`) rather than a number;
+`scraper.badges_from_trophy_progress` turns them into `(earned, possible)` and
+`persist_snapshot` writes them to `score_snapshots.badges_earned` / `badges_possible`.
+`progress` is 2dp, so a tier recovers the count only to ±0.005×threshold — hence reading
+the *smallest* threshold still under 1.0, exact up to 75 badges and ±1 only past gold.
+`platinum.requiredBadges` is the number of badges attainable **at that location** (badges
+needing a room it lacks are excluded), which is why the trophy helper drops any tier
+threshold above `possible`: a 40-badge location can never reach silver's 50, so offering
+"24 to silver" would be an errand with no end. The committed langley fixture predates the
+field entirely and parses to `(None, None)` — readers must tolerate that, and None is the
+absence of a claim, not zero.
+
+**Which badges** comes from `api.ryflix.ca/api/badges/activate-sync/<handle>`, a
+community-run proxy in front of an official Activate badge API (a bad handle returns
+`{"error": "Activate API returned 500"}`, naming its upstream). Public, unauthenticated,
+keyed on the handle alone. It returns every badge applicable to the player — earned or
+not, with name, description, star value and **partial progress** — so there is no separate
+catalog fetch and `badges` is a mirror of upstream, refreshed on every poll.
+
+Because it is somebody's personal server it is `config.badges.api_base`, and `poll_all`
+takes `badge_cfg` **opt-in**: without it the poll is scores and catalog only, so no caller
+reaches a third party by omission. A badge failure increments `badges_errors` and never
+fails the score poll, the same treatment the catalog gets. If the proxy disappears the
+dashboard's count survives on `trophyProgress` and only the per-badge detail goes stale.
+
+Four traps, all of them load-bearing:
+
+- **`badge_id` is the key, never `name`.** The API returns 118 badges under 117 names:
+  `Untouchable 5.0` is id 111 (Piperooni) *and* id 125 (Wormholes). The community master
+  document has the same collision.
+- **The community badge trackers use their own id space.** Joining the sync response to
+  the ryflix page's embedded `BADGES` array by id mismatches 108 of 118 rows, which is why
+  their own page matches by normalised name. Nothing of theirs may be joined by id.
+- **`total_progress` is 0 for `Activated`, `Halfway Mark`, `Completionist` and
+  `The Grand Tour`**, where `progress` is a bare running count. Never divide by it; the
+  front end renders those as a plain number and Closest-to-earning skips them, since a
+  fraction needs a denominator.
+- **`badges.stars` is the badge's own value** (100 of 2000 earned for one live profile),
+  unrelated to `score_snapshots.stars` (924 for the same profile). Different numbers.
+
+`player_badges` has no `location_id`: badges transfer between locations where scores and
+rank do not, so the dashboard shows one count on the player row and leaves the
+per-location rows blank. `earned_on` is stamped only on an observed false→true transition
+and dated `streak.activity_day` — the same one-day backdate the visit rows get, so a badge
+and the visit from the same session can't disagree. On a player's *first* poll there is no
+transition to observe, so everything already earned is left NULL rather than backdated to
+today, which would be a fabricated date. Multi-handle players go through
+`scraper.combine_badges`: earned is OR'd and progress maxed, never summed — two of one
+person's accounts hold overlapping sets, so a sum is a total neither account has.
+
+`/badges` shows the enumerated count and the page's own tally side by side and says so
+when they disagree, rather than picking a winner. Note "badge" already meant the
+`Rank_10-19.png` header image in `scraper.py`/`db.py` and `.rec-badge` is the records
+crown in `app.css`; the achievement sense is the newcomer.
+
+### Badge reference data is keyed by name *and* description
+Activate publishes a badge's name, description and star value and nothing else — no
+room, no difficulty, no way to do it. `app/badge_reference.py` carries that, merged from
+the community *Activate Games Master Document* (room, level, tips, watch-outs, and the
+Easter Egg / Riddle hints and answers) and the badge tracker at activate.ryflix.ca
+(difficulty, optimal players, overlapping badges, notes). Regenerate with
+`python -m app.tools.gen_badge_reference "<doc>.md" <badges>.html > app/badge_reference.py`;
+neither input is committed, the generated module is — same arrangement as
+`master_document.py`, which it deliberately mirrors down to the `lookup` contract of
+"every field always present".
+
+**Keyed on the composite `norm(name)|norm(description)`**, because the name alone is
+ambiguous and the ambiguity is load-bearing: `Untouchable 5.0` is two badges in two
+rooms — Piperooni in Pipes, Wormholes in Portals — which at the tracked pair of
+locations means one is Langley-only and the other Coquitlam-only. `lookup` falls back to
+a name-only index merged one field at a time, so a field the two disagree about is
+dropped rather than answered with the other badge's value. Normalising is not optional:
+13 names differ in case or spacing between sources (`Activ8`/`ACTIV8`,
+`10 for 10`/`10 For 10`), and 117 of 118 live badges only match once normalised.
+`Mascot` matches nothing and renders with no detail — expected, not an error.
+
+Where the sources disagree about a room the document wins: it was right about both
+`Untouchable 5.0` rooms (checked against `location_games`, which the other source got
+wrong for both) and it is more complete about rooms running the same game
+(`Mega Laser or Trench` vs just Mega Laser). Two conflicts stay unresolved because
+neither game runs at a tracked location — Steady Stream's Photon Rush and Recollection's
+Memory — and the document is taken on both.
+
+`hint` and `giveaway` are the Easter Egg and Riddle answers. The source document hides
+them as white-on-white text because each can only be solved once; this page shows them
+outright alongside the other detail, so expanding a badge is enough to spend that. That
+is a deliberate call — the page exists to surface everything known about a badge — but
+it is the reason the detail is behind a click at all rather than sitting in the grid.
+
+**The "Where" line is a weak negative and must stay worded as one.** It joins a badge's
+rooms against `location_games.room_name`, which is only each location's *scoring* rooms:
+the photo room is in no location's list, so `Photobomb` looks unobtainable everywhere.
+Badges also transfer between locations, so `Row By Row` (Climb, at neither tracked
+location) is earned all the same. Both cases are live in the current data, which is why
+the page says "no scoring room for it at your tracked locations" rather than "you can't
+get this", never makes the negative claim about a badge somebody has already earned, and
+never hides one behind the checkbox on that basis.
 
 ### roomScores is per-location and sparse
 `roomScores` is the best score anyone *at that location* has posted, not a global best: coquitlam
