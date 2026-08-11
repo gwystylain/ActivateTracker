@@ -35,6 +35,8 @@
     let data = null;                     // last /api/badge-data payload
     let selectedPlayers = new Set();     // player ids (numbers)
     const expanded = new Set();          // badge_ids showing their detail row
+    // null key = the order the API sent, which is already by name.
+    let sort = { key: null, dir: 1 };    // dir: 1 ascending, -1 descending
 
     // Blocked storage throws on access; a saved filter is not worth taking the
     // page down for, so both directions swallow it (same as games.js).
@@ -214,6 +216,95 @@
         });
     }
 
+    // ---------- sorting ----------
+    //
+    // One value function per column. Returning null means "no answer here", and
+    // those always sink to the bottom whichever way the column is pointing —
+    // ascending by room would otherwise open on a wall of dashes.
+
+    function sortValue(key, b) {
+        if (key === 'name') return b.name.toLowerCase();
+        if (key === 'room') return b.rooms && b.rooms.length ? b.rooms.join('/') : null;
+        // The document's own scale, not the alphabet: sorted as text, Very Hard
+        // would land between Medium and Hard.
+        if (key === 'difficulty') {
+            const i = DIFFICULTIES.indexOf(b.difficulty);
+            return i < 0 ? null : i;
+        }
+        // "2, 3, 4" sorts by the smallest count that works; "Depends" has no
+        // number in it and so has no place on the scale.
+        if (key === 'players') {
+            const m = /\d+/.exec(b.players || '');
+            return m ? Number(m[0]) : null;
+        }
+        if (key === 'stars') return typeof b.stars === 'number' ? b.stars : null;
+
+        if (key.startsWith('p:')) return playerRank(Number(key.slice(2)), b);
+        return null;
+    }
+
+    // Descending, this reads as: what they hold, then what they are closest to
+    // holding, then what they have merely started, then everything untouched.
+    function playerRank(playerId, b) {
+        const st = stateOf(playerId, b.badge_id);
+        if (!st) return null;
+        if (st.earned) return 10;
+        if (st.total_progress > 0 && st.progress > 0) return 1 + st.progress / st.total_progress;
+        if (st.progress > 0) return 0.5;      // counted, but towards no total
+        return 0;
+    }
+
+    function sorted(badges) {
+        if (!sort.key) return badges;
+        const key = sort.key;
+        return [...badges].sort((a, b) => {
+            const av = sortValue(key, a);
+            const bv = sortValue(key, b);
+            if (av === null || bv === null) {
+                if (av === bv) return tieBreak(a, b);
+                return av === null ? 1 : -1;      // nulls last, both directions
+            }
+            if (av < bv) return -sort.dir;
+            if (av > bv) return sort.dir;
+            return tieBreak(a, b);
+        });
+    }
+
+    // Deterministic, so the two badges both called "Untouchable 5.0" don't swap
+    // places between renders of the same sort.
+    function tieBreak(a, b) {
+        return a.name.localeCompare(b.name) || a.badge_id - b.badge_id;
+    }
+
+    function toggleSort(key, firstDir) {
+        if (sort.key === key) sort = { key, dir: -sort.dir };
+        else sort = { key, dir: firstDir };
+        save('sort', sort);
+        renderGrid();
+    }
+
+    function headerCell(label, key, firstDir) {
+        const active = sort.key === key;
+        const th = el('th', {
+            className: 'sortable' + (active ? ' sorted' : ''),
+            attrs: { 'aria-sort': active ? (sort.dir === 1 ? 'ascending' : 'descending') : 'none' },
+        });
+        const btn = el('button', {
+            className: 'sort-btn',
+            attrs: { type: 'button' },
+        }, [
+            el('span', { text: label }),
+            el('span', {
+                className: 'sort-arrow',
+                text: active ? (sort.dir === 1 ? '▲' : '▼') : '',
+                attrs: { 'aria-hidden': 'true' },
+            }),
+        ]);
+        btn.addEventListener('click', () => toggleSort(key, firstDir));
+        th.appendChild(btn);
+        return th;
+    }
+
     // ---------- rendering ----------
 
     function render() {
@@ -335,16 +426,19 @@
         // anchored to is about to be destroyed.
         hideTip();
         const players = activePlayers();
-        const badges = visibleBadges();
+        const badges = sorted(visibleBadges());
         const cols = 5 + players.length;
 
+        // First click sorts the way the column is actually useful: names and
+        // rooms A–Z, easiest and fewest-players first, but most stars and — for
+        // a player — what they already hold at the top.
         gridHead.replaceChildren(el('tr', null, [
-            el('th', { text: 'Badge' }),
-            el('th', { text: 'Room' }),
-            el('th', { text: 'Difficulty' }),
-            el('th', { text: 'Players' }),
-            el('th', { text: 'Stars' }),
-            ...players.map(p => el('th', { text: p.display_name })),
+            headerCell('Badge', 'name', 1),
+            headerCell('Room', 'room', 1),
+            headerCell('Difficulty', 'difficulty', 1),
+            headerCell('Players', 'players', 1),
+            headerCell('Stars', 'stars', -1),
+            ...players.map(p => headerCell(p.display_name, 'p:' + p.id, -1)),
         ]));
 
         gridBody.replaceChildren();
@@ -457,15 +551,20 @@
         for (const w of b.watch_out || []) bits.push(field('Watch out', w));
         for (const f of b.fun_facts || []) bits.push(field('Fun fact', f));
 
+        // An empty panel has two different causes and they are not the same
+        // news: a badge the documents cover only with a difficulty and a player
+        // count has nothing *left* to show, since both are already in the row.
+        // Only a badge they don't cover at all is a gap in the documents.
+        const covered = b.difficulty || b.players || (b.rooms && b.rooms.length);
         const cell = el('td', { attrs: { colspan: String(cols) } }, [
             bits.length
                 ? el('div', { className: 'badge-detail' }, bits)
-                : el('p', {
-                    className: 'muted small',
-                    // The community document is a superset of any one location
-                    // but still behind Activate in places; Mascot is its gap.
-                    text: 'The community document has no detail for this badge yet.',
-                }),
+                : el('div', { className: 'badge-detail' }, [
+                    el('p', { className: 'muted small', text: covered
+                        ? 'Nothing beyond the columns above — no room, tips or '
+                          + 'notes recorded for this badge.'
+                        : 'The community documents have no detail for this badge yet.' }),
+                ]),
         ]);
         return el('tr', { className: 'detail-row' }, [cell]);
     }
@@ -582,6 +681,16 @@
             if (saved && [...sel.options].some(o => o.value === saved)) sel.value = saved;
         }
         hereOnlyBox.checked = load('here', false) === true;
+
+        const savedSort = load('sort', null);
+        if (savedSort && (savedSort.dir === 1 || savedSort.dir === -1)) {
+            // A sort by a player who is no longer tracked has no column to
+            // point at, so it falls back to the API's order rather than
+            // silently ranking everything equal.
+            const stillThere = !String(savedSort.key).startsWith('p:')
+                || known.has(Number(String(savedSort.key).slice(2)));
+            if (stillThere) sort = { key: savedSort.key, dir: savedSort.dir };
+        }
 
         render();
     }
