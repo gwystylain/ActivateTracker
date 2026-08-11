@@ -415,7 +415,7 @@
                 el('td', { className: 'muted small', text: String(i + 1) }),
                 el('td', null, [badgeName(r.badge, true)]),
                 roomCell(r.badge),
-                el('td', null, [difficultyChip(r.badge.difficulty)]),
+                el('td', null, [difficultyChip(r.badge)]),
                 el('td', { className: 'muted small', text: r.badge.players || '—' }),
                 el('td', { className: 'count' }, [
                     el('strong', { text: String(r.missing.length) }),
@@ -522,7 +522,7 @@
                     badgeName(b, false),
                 ]),
                 roomCell(b),
-                el('td', null, [difficultyChip(b.difficulty)]),
+                el('td', null, [difficultyChip(b)]),
                 el('td', { className: 'muted small', text: b.players || '—' }),
                 el('td', { className: 'muted small', text: b.stars ? String(b.stars) : '—' }),
                 ...players.map(p => cell(stateOf(p.id, b.badge_id))),
@@ -551,12 +551,25 @@
         return el('td', { className: 'small', text: b.rooms.join(joiner) });
     }
 
-    function difficultyChip(d) {
+    // An estimated grade is shown, but never as if the document had said it —
+    // starred and muted, the same treatment /games gives a player count the
+    // document records without consensus.
+    function difficultyChip(b) {
+        const d = b.difficulty;
         if (!d) return el('span', { className: 'muted', text: '—' });
-        return el('span', {
+        const chip = el('span', {
             className: 'diff diff-' + d.toLowerCase().replace(/[^a-z]/g, ''),
             text: d,
         });
+        if (!b.difficulty_estimated) return chip;
+        return el('span', {
+            className: 'diff-est',
+            attrs: { title: b.difficulty_note || 'Estimated, not from the documents' },
+        }, [
+            chip,
+            el('span', { className: 'flag', text: '*', attrs: { 'aria-hidden': 'true' } }),
+            el('span', { className: 'sr-only', text: ' — estimated, not from the documents' }),
+        ]);
     }
 
     function earnedByAnyone(b) {

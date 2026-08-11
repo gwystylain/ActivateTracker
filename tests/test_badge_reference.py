@@ -46,15 +46,17 @@ def test_names_are_matched_across_the_sources_own_spellings():
     assert lookup("10 for 10")["difficulty"] is not None
 
 
-def test_a_badge_no_document_covers_gets_the_full_empty_shape():
-    """Mascot is Activate's, not the community's, yet. Every key still present,
-    so the front end never special-cases it."""
-    empty = lookup("Mascot", "whatever it is")
+def test_a_badge_nothing_covers_gets_the_full_empty_shape():
+    """Activate adds badges the community documents haven't reached yet, so a
+    miss has to be survivable: every key still present, and the front end never
+    special-cases it."""
+    empty = lookup("Some Badge Nobody Has Written Up", "whatever it is")
 
     assert empty["rooms"] == () and empty["rooms_mode"] == "any"
     assert empty["tips"] == () and empty["watch_out"] == () and empty["fun_facts"] == ()
+    assert empty["difficulty_estimated"] is False
     for field in ("level", "difficulty", "players", "overlapping", "notes",
-                  "hint", "giveaway"):
+                  "hint", "giveaway", "difficulty_note"):
         assert empty[field] is None, field
 
 
@@ -77,18 +79,17 @@ def test_easter_eggs_and_riddles_carry_their_hint_and_answer():
     assert lookup("Riddle 2.0")["giveaway"].startswith("On the score checker iPad")
 
 
-def test_every_live_badge_but_one_picks_up_reference_detail():
+def test_every_live_badge_picks_up_reference_detail():
     """A regression fence around the name join: if the document is re-exported
     and the match rate collapses, the page quietly loses its detail."""
     live = json.loads(BADGE_FIXTURE.read_text(encoding="utf-8"))
-    described = [
-        b for b in live
-        if any(lookup(b["name"], b["description"])[f]
-               for f in ("rooms", "difficulty", "tips", "notes", "hint"))
+    bare = [
+        b["name"] for b in live
+        if not any(lookup(b["name"], b["description"])[f]
+                   for f in ("rooms", "difficulty", "tips", "notes", "hint"))
     ]
 
-    assert len(live) - len(described) == 1
-    assert [b["name"] for b in live if b not in described] == ["Mascot"]
+    assert bare == []
 
 
 def test_every_record_is_well_formed():
@@ -112,3 +113,46 @@ def test_every_record_is_well_formed():
             value = rec[field]
             if value:
                 assert not value.startswith(("Tip:", "Room:", "Hint:", "Giveaway:")), key
+
+
+# ---------- estimated difficulties ----------
+
+def test_the_two_ungraded_badges_get_an_estimate_that_says_so():
+    """Neither document grades Photobomb or Mascot. A hole in the column is
+    worse than a soft answer, but the soft answer must not pass for a sourced
+    one — so it carries a flag and its reasoning."""
+    for name in ("Photobomb", "Mascot"):
+        rec = lookup(name)
+        assert rec["difficulty"] == "Easy", name
+        assert rec["difficulty_estimated"] is True, name
+        assert rec["difficulty_note"], name
+
+
+def test_a_sourced_grade_is_never_marked_as_an_estimate():
+    graded = lookup("Easter Egg Flip")
+    assert graded["difficulty"] == "Hard"
+    assert graded["difficulty_estimated"] is False
+    assert graded["difficulty_note"] is None
+
+    estimated = [r["name"] for r in BADGES.values() if r["difficulty_estimated"]]
+    assert sorted(estimated) == ["Mascot", "Photobomb"]
+
+
+def test_every_live_badge_now_has_a_difficulty():
+    live = json.loads(BADGE_FIXTURE.read_text(encoding="utf-8"))
+    ungraded = [
+        b["name"] for b in live
+        if not lookup(b["name"], b["description"])["difficulty"]
+    ]
+    assert ungraded == []
+
+
+def test_a_grade_is_one_of_the_documents_four():
+    """The scale is closed. A fifth value would sort off the end of the
+    difficulty column and drop out of its filter."""
+    scale = {"Easy", "Medium", "Hard", "Very Hard"}
+    for key, rec in BADGES.items():
+        assert rec["difficulty"] in scale, key
+        # A note explains an estimate; on a sourced grade it would be claiming
+        # something about a value this repo didn't choose.
+        assert bool(rec["difficulty_note"]) == rec["difficulty_estimated"], key

@@ -337,6 +337,18 @@ wrong for both) and it is more complete about rooms running the same game
 neither game runs at a tracked location — Steady Stream's Photon Rush and Recollection's
 Memory — and the document is taken on both.
 
+Two badges are graded by neither source — `Photobomb` and `Mascot`, both of which the
+ryflix catalog omits — so their `difficulty` is this repo's estimate, declared by
+`difficulty_estimated` with the reasoning in `difficulty_note`. Both are graded Easy:
+neither asks for any play skill, and of the 20 graded 5-star badges 18 are Easy and none
+is Hard or above. `gen_badge_reference.ESTIMATES` only ever *fills a hole* — an estimate
+that finds a sourced grade already there is dropped with a warning to stderr, so a
+document catching up retires it rather than being argued with. The page shows an
+estimated grade muted and starred, the same treatment `/games` gives a player count the
+document records without consensus: a soft answer beats a hole in the column, but it must
+not read as something a document said. The filter and the sort treat an estimated Easy as
+an Easy — same answer, less settled.
+
 `hint` and `giveaway` are the Easter Egg and Riddle answers. The source document hides
 them as white-on-white text because each can only be solved once; this page shows them
 outright alongside the other detail, so expanding a badge is enough to spend that. That

@@ -26,6 +26,34 @@ import sys
 from pathlib import Path
 from typing import Any
 
+# Difficulty grades neither document records, filled in here so the column has
+# no holes. These are *estimates* and are marked as such all the way to the page
+# — they never overwrite a sourced grade, and the moment either document grades
+# one of these the estimate steps aside (asserted in build()).
+#
+# Both are 5-star badges, and of the 20 graded 5-star badges 18 are Easy and
+# none is Hard or above. Neither asks for any play skill: the scale grades the
+# challenge, and comparable logistics badges — Early Bird, Up to Date — are Easy.
+ESTIMATES: dict[str, dict[str, Any]] = {
+    "photobomb": {
+        "difficulty": "Easy",
+        "why": "Estimated: no skill or failure condition, just visit the photo "
+               "room and take the photo.",
+    },
+    "mascot": {
+        # The community document has no entry at all for this one, so the name
+        # and description are Activate's own, carried here to key the record.
+        "name": "Mascot",
+        "description": (
+            "Come to Activate with your Activate water bottle and in your "
+            "Activate shirt and hat"
+        ),
+        "difficulty": "Easy",
+        "why": "Estimated: nothing to play. The barrier is owning the three "
+               "pieces of merch and remembering them, not doing anything hard.",
+    },
+}
+
 _ENTRY = re.compile(r"^\* \*\*(.+?):\*\*\s*(.*?)\s*$")
 _FIELD = re.compile(r"^\s+\* ##\s*([A-Za-z/ ]+?):\s*(.*?)\s*$")
 _MULTI = {"Tip", "Watch Out", "Fun Fact"}
@@ -127,6 +155,8 @@ def build(doc_text: str, ryflix_html: str | None) -> dict[str, dict[str, Any]]:
             "rooms_mode": mode,
             "level": fields.get("Game/Level") or fields.get("Level"),
             "difficulty": extra.get("difficulty") or None,
+            "difficulty_estimated": False,
+            "difficulty_note": None,
             "players": extra.get("players") or None,
             "overlapping": extra.get("overlapping") or None,
             "notes": extra.get("notes") or None,
@@ -137,10 +167,62 @@ def build(doc_text: str, ryflix_html: str | None) -> dict[str, dict[str, Any]]:
             "giveaway": fields.get("Giveaway"),
         }
         out[key_for(entry["name"], entry["description"])] = record
+
+    _apply_estimates(out)
     return out
 
 
+def _apply_estimates(records: dict[str, dict[str, Any]]) -> None:
+    """Fill difficulty holes, and only holes.
+
+    An estimate that finds a grade already there is a document that has caught
+    up, so it is dropped rather than argued with — loudly, because a stale
+    estimate sitting in the table is the thing worth noticing.
+    """
+    by_name = {key.split("|", 1)[0]: key for key in records}
+
+    for name_key, estimate in ESTIMATES.items():
+        key = by_name.get(name_key)
+        if key is None:
+            # Not in the document at all — Mascot. Build the record so the
+            # badge still resolves, with nothing claimed but the estimate.
+            key = key_for(name_key, estimate.get("description", ""))
+            records[key] = {
+                "name": estimate.get("name", name_key),
+                "rooms": (),
+                "rooms_mode": "any",
+                "level": None,
+                "difficulty": None,
+                "difficulty_estimated": False,
+                "difficulty_note": None,
+                "players": None,
+                "overlapping": None,
+                "notes": None,
+                "tips": (),
+                "watch_out": (),
+                "fun_facts": (),
+                "hint": None,
+                "giveaway": None,
+            }
+
+        record = records[key]
+        if record["difficulty"]:
+            print(
+                f"note: {name_key!r} now has a sourced difficulty "
+                f"({record['difficulty']!r}); dropping the estimate. Remove it "
+                f"from ESTIMATES.",
+                file=sys.stderr,
+            )
+            continue
+        record["difficulty"] = estimate["difficulty"]
+        record["difficulty_estimated"] = True
+        record["difficulty_note"] = estimate["why"]
+
+
 def _lit(v: Any, indent: str) -> str:
+    # Before anything else: json.dumps would write `false`, which is not Python.
+    if isinstance(v, bool):
+        return "True" if v else "False"
     if isinstance(v, tuple):
         if not v:
             return "()"
@@ -191,8 +273,14 @@ the document is taken on both.
 hides them as white-on-white text because each can only be solved once; /badges
 shows them with the rest of a badge's detail once it is expanded.
 
-A badge with no entry here — `Mascot`, which the document hasn't caught up with —
-gets every field empty and renders with no detail. That is expected, not an error.
+Two badges are graded by neither document, so `difficulty` there is this repo's
+own estimate: `difficulty_estimated` says so and `difficulty_note` says why. The
+page shows them muted and starred rather than hiding them — a soft answer beats
+a hole in the column, but it should not pass for the document's. An estimate is
+only ever a gap-filler; it never overwrites a sourced grade.
+
+A badge with no entry at all gets every field empty and renders with no detail.
+That is expected, not an error.
 """
 from __future__ import annotations
 
@@ -209,6 +297,11 @@ _EMPTY: dict[str, Any] = {
     "rooms_mode": "any",
     "level": None,
     "difficulty": None,
+    # True where the grade is this repo's estimate rather than either document's
+    # — shown, but visibly softer, the way master_document's disputed player
+    # counts are. `difficulty_note` says why.
+    "difficulty_estimated": False,
+    "difficulty_note": None,
     "players": None,
     "overlapping": None,
     "notes": None,

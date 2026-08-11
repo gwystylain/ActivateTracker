@@ -345,6 +345,10 @@ table.badge-grid th.sorted .sort-btn { color: var(--accent); }
 .sort-arrow { font-size: 0.7em; }
 
 .diff { font-size: 0.85em; white-space: nowrap; }
+/* An estimated grade: still shown, still colour-coded, but muted and starred so
+   it never reads as something a document said. */
+.diff-est { cursor: help; opacity: 0.65; white-space: nowrap; }
+.diff-est .flag { margin-left: 1px; font-size: 0.8em; }
 .diff-easy { color: var(--ok); }
 .diff-medium { color: var(--accent); }
 .diff-hard { color: var(--gold); }
