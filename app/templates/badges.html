@@ -68,6 +68,34 @@
     <p class="muted small" id="badgesStatus">Loading…</p>
 </section>
 
+<section class="card" id="farmerCard" hidden>
+    <details class="card-panel" open>
+        <summary><h2>Badge farmer</h2></summary>
+        <p class="muted small">
+            Badges the selected players don't have, ranked by how many of them would
+            earn it in one go &mdash; a badge none of you hold is worth one each.
+            Equal hauls are broken by difficulty, easiest first, so the cheapest wins
+            come to the top.
+        </p>
+        <div class="table-wrap">
+            <table class="data badge-farmer">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Badge</th>
+                        <th>Room</th>
+                        <th>Difficulty</th>
+                        <th>Players</th>
+                        <th>Badges to gain</th>
+                    </tr>
+                </thead>
+                <tbody id="farmerBody"></tbody>
+            </table>
+        </div>
+        <p class="muted small" id="farmerNote"></p>
+    </details>
+</section>
+
 <section class="card" id="closeCard" hidden>
     <details class="card-panel" open>
         <summary><h2>Closest to earning</h2></summary>

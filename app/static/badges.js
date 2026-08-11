@@ -15,6 +15,9 @@
     const hereOnlyBox = document.getElementById('hereOnly');
     const playerBox = document.getElementById('playerFilter');
     const statusEl = document.getElementById('badgesStatus');
+    const farmerCard = document.getElementById('farmerCard');
+    const farmerBody = document.getElementById('farmerBody');
+    const farmerNote = document.getElementById('farmerNote');
     const closeCard = document.getElementById('closeCard');
     const closeBody = document.getElementById('closeBody');
     const closeNote = document.getElementById('closeNote');
@@ -25,6 +28,7 @@
     const fmt = new Intl.NumberFormat();
     const KEY = 'atrk.badges';
     const CLOSE_LIMIT = 15;
+    const FARM_LIMIT = 15;
     // Sentinel rather than prose, so the filter and the detail line can't drift
     // apart the way two copies of the same sentence would.
     const NOWHERE = 'No room for it at your locations';
@@ -310,6 +314,7 @@
     function render() {
         hideTip();
         renderSummary();
+        renderFarmer();
         renderClose();
         renderGrid();
         renderStatus();
@@ -376,6 +381,64 @@
             className: 'trophy trophy-' + tier,
             text: tier[0].toUpperCase() + tier.slice(1),
         });
+    }
+
+    // Where the difficulty sits on the document's scale. Unrecorded sorts after
+    // everything on it — same null-last rule the sortable columns use.
+    function difficultyRank(b) {
+        const i = DIFFICULTIES.indexOf(b.difficulty);
+        return i < 0 ? DIFFICULTIES.length : i;
+    }
+
+    // What one visit could add to the group's badge count. A cooperative badge
+    // is awarded to everyone who does it, so a badge none of the selected
+    // players hold is worth one each — which is what makes this a ranking and
+    // not just a list of what's missing.
+    function renderFarmer() {
+        const players = activePlayers();
+        const rows = [];
+        for (const badge of visibleBadges()) {
+            const missing = players.filter(p => {
+                const st = stateOf(p.id, badge.badge_id);
+                return !st || !st.earned;
+            });
+            if (missing.length) rows.push({ badge, missing });
+        }
+        rows.sort((a, b) =>
+            b.missing.length - a.missing.length
+            || difficultyRank(a.badge) - difficultyRank(b.badge)
+            || tieBreak(a.badge, b.badge));
+
+        farmerBody.replaceChildren();
+        rows.slice(0, FARM_LIMIT).forEach((r, i) => {
+            farmerBody.appendChild(el('tr', null, [
+                el('td', { className: 'muted small', text: String(i + 1) }),
+                el('td', null, [badgeName(r.badge, true)]),
+                roomCell(r.badge),
+                el('td', null, [difficultyChip(r.badge.difficulty)]),
+                el('td', { className: 'muted small', text: r.badge.players || '—' }),
+                el('td', { className: 'count' }, [
+                    el('strong', { text: String(r.missing.length) }),
+                    // Naming them only earns its space once there is more than
+                    // one player to tell apart.
+                    players.length > 1
+                        ? el('span', {
+                            className: 'muted small',
+                            text: ' ' + r.missing.map(p => p.display_name).join(', '),
+                        })
+                        : null,
+                ]),
+            ]));
+        });
+
+        farmerCard.hidden = rows.length === 0;
+        const total = rows.reduce((sum, r) => sum + r.missing.length, 0);
+        farmerNote.textContent = rows.length > FARM_LIMIT
+            ? 'Showing the top ' + FARM_LIMIT + ' of ' + rows.length
+                + ' badges with something to gain — ' + total
+                + ' badges on the table in all.'
+            : rows.length + ' badges with something to gain, '
+                + total + ' badges on the table in all.';
     }
 
     function renderClose() {

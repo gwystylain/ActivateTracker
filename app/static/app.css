@@ -248,7 +248,9 @@ table.level-table td.top-score .val { display: inline-block; font-variant-numeri
 /* ---------- /badges ---------- */
 
 table.badge-summary td.count,
+table.badge-farmer td.count,
 table.badge-close td.count { font-variant-numeric: tabular-nums; }
+table.badge-farmer td.count strong { color: var(--accent); }
 
 .trophy {
     display: inline-block; padding: 1px 9px; border-radius: 999px;
