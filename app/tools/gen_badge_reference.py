@@ -65,6 +65,24 @@ def _clean(s: str) -> str:
     return _ESCAPED.sub(r"\1", s).strip()
 
 
+_ANCHOR_TAG = re.compile(r"<a\b[^>]*href=\"([^\"]*)\"[^>]*>(.*?)</a>", re.I | re.S)
+_ANY_TAG = re.compile(r"<[^>]+>")
+
+
+def _plain(text: Any) -> Any:
+    """Flatten any HTML a source snuck in down to text.
+
+    Two of the ryflix notes carry an <a> tag. Every string here is rendered with
+    textContent — third-party text must never be parsed as markup — so a tag
+    left in place shows up on the page as literal angle brackets. A link keeps
+    both its label and its URL rather than losing one of them.
+    """
+    if not isinstance(text, str):
+        return text
+    text = _ANCHOR_TAG.sub(lambda m: m.group(2).strip() + " (" + m.group(1) + ")", text)
+    return re.sub(r"\s+", " ", _ANY_TAG.sub("", text)).strip()
+
+
 def norm(s: str | None) -> str:
     """Match key: case, spacing and punctuation differ between every source.
 
@@ -166,6 +184,12 @@ def build(doc_text: str, ryflix_html: str | None) -> dict[str, dict[str, Any]]:
             "hint": fields.get("Hint"),
             "giveaway": fields.get("Giveaway"),
         }
+        for field in ("level", "difficulty", "players", "overlapping", "notes",
+                      "hint", "giveaway"):
+            record[field] = _plain(record[field]) or None
+        for field in ("tips", "watch_out", "fun_facts"):
+            record[field] = tuple(_plain(x) for x in record[field])
+
         out[key_for(entry["name"], entry["description"])] = record
 
     _apply_estimates(out)

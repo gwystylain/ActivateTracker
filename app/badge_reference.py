@@ -363,7 +363,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "difficulty_note": None,
         "players": "5",
         "overlapping": None,
-        "notes": "In Strike 2, occasionally the game will start with a 000 tile. Hit these numbers in order: 008 → 006 → 007 → 005 → 003 → 000 → 009. You will hear a ringing tone and a voice. Once that ends, complete the level normally, starting with 000. <a href=\"https://www.youtube.com/watch?v=tHL2XeuA6Yg\" target=\"_blank\" style=\"color:var(--accent)\">Reference</a>",
+        "notes": "In Strike 2, occasionally the game will start with a 000 tile. Hit these numbers in order: 008 → 006 → 007 → 005 → 003 → 000 → 009. You will hear a ringing tone and a voice. Once that ends, complete the level normally, starting with 000. Reference (https://www.youtube.com/watch?v=tHL2XeuA6Yg)",
         "tips": (),
         "watch_out": (),
         "fun_facts": (),
@@ -1226,7 +1226,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "difficulty_note": None,
         "players": "5",
         "overlapping": None,
-        "notes": "Before the game starts, enter ↑↑↓↓←→←→. You will hear a sound, then beat the level. <a href=\"https://en.wikipedia.org/wiki/Konami_Code\" target=\"_blank\" style=\"color:var(--accent)\">Reference (Konami Code)</a>",
+        "notes": "Before the game starts, enter ↑↑↓↓←→←→. You will hear a sound, then beat the level. Reference (Konami Code) (https://en.wikipedia.org/wiki/Konami_Code)",
         "tips": (),
         "watch_out": (
             "Must be done before the game starts.",

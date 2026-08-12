@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 from app.badge_reference import BADGES, lookup, norm
@@ -156,3 +157,22 @@ def test_a_grade_is_one_of_the_documents_four():
         # A note explains an estimate; on a sourced grade it would be claiming
         # something about a value this repo didn't choose.
         assert bool(rec["difficulty_note"]) == rec["difficulty_estimated"], key
+
+
+def test_no_field_carries_markup_through_to_the_page():
+    """Two ryflix notes ship an <a> tag. Everything is rendered with
+    textContent — third-party text must never be parsed as markup — so a tag
+    left in the data would show up as literal angle brackets, and stripping it
+    outright would lose the link."""
+    tag = re.compile(r"<[a-zA-Z/]")
+    for key, rec in BADGES.items():
+        for field in ("level", "difficulty", "players", "overlapping", "notes",
+                      "hint", "giveaway", "difficulty_note"):
+            value = rec[field]
+            assert not (value and tag.search(value)), f"{key}: markup in {field}"
+        for field in ("tips", "watch_out", "fun_facts"):
+            for line in rec[field]:
+                assert not tag.search(line), f"{key}: markup in {field}"
+
+    notes = lookup("Call Jenny")["notes"]
+    assert "Reference (https://www.youtube.com/watch?v=tHL2XeuA6Yg)" in notes

@@ -29,6 +29,7 @@
     const KEY = 'atrk.badges';
     const CLOSE_LIMIT = 15;
     const FARM_LIMIT = 15;
+    const FARMER_COLS = 6;   // #, Badge, Room, Difficulty, Players, Badges to gain
     // Sentinel rather than prose, so the filter and the detail line can't drift
     // apart the way two copies of the same sentence would.
     const NOWHERE = 'No room for it at your locations';
@@ -311,6 +312,21 @@
 
     // ---------- rendering ----------
 
+    // Expanded state belongs to the badge, not to the card it was clicked in, so
+    // a badge opened in one is open in the other. Both re-render together so the
+    // two can never drift out of step.
+    function toggleExpanded(badgeId) {
+        if (expanded.has(badgeId)) expanded.delete(badgeId);
+        else expanded.add(badgeId);
+        renderExpandable();
+    }
+
+    function renderExpandable() {
+        hideTip();
+        renderFarmer();
+        renderGrid();
+    }
+
     function render() {
         hideTip();
         renderSummary();
@@ -411,12 +427,26 @@
 
         farmerBody.replaceChildren();
         rows.slice(0, FARM_LIMIT).forEach((r, i) => {
-            farmerBody.appendChild(el('tr', null, [
+            const b = r.badge;
+            const isOpen = expanded.has(b.badge_id);
+            // The row is the tab stop, so the name inside it must not be one
+            // too — same arrangement as the grid.
+            const row = el('tr', {
+                className: 'badge-row' + (isOpen ? ' expanded' : ''),
+                attrs: {
+                    role: 'button',
+                    tabindex: '0',
+                    'aria-expanded': isOpen ? 'true' : 'false',
+                },
+            }, [
                 el('td', { className: 'muted small', text: String(i + 1) }),
-                el('td', null, [badgeName(r.badge, true)]),
-                roomCell(r.badge),
-                el('td', null, [difficultyChip(r.badge)]),
-                el('td', { className: 'muted small', text: r.badge.players || '—' }),
+                el('td', null, [
+                    el('span', { className: 'toggle', text: '▸', attrs: { 'aria-hidden': 'true' } }),
+                    badgeName(b, false),
+                ]),
+                roomCell(b),
+                el('td', null, [difficultyChip(b)]),
+                el('td', { className: 'muted small', text: b.players || '—' }),
                 el('td', { className: 'count' }, [
                     el('strong', { text: String(r.missing.length) }),
                     // Naming them only earns its space once there is more than
@@ -428,7 +458,16 @@
                         })
                         : null,
                 ]),
-            ]));
+            ]);
+            row.addEventListener('click', () => toggleExpanded(b.badge_id));
+            row.addEventListener('keydown', e => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    toggleExpanded(b.badge_id);
+                }
+            });
+            farmerBody.appendChild(row);
+            if (isOpen) farmerBody.appendChild(detailRow(b, FARMER_COLS));
         });
 
         farmerCard.hidden = rows.length === 0;
@@ -528,14 +567,12 @@
                 ...players.map(p => cell(stateOf(p.id, b.badge_id))),
             ]);
 
-            function toggle() {
-                if (expanded.has(b.badge_id)) expanded.delete(b.badge_id);
-                else expanded.add(b.badge_id);
-                renderGrid();
-            }
-            row.addEventListener('click', toggle);
+            row.addEventListener('click', () => toggleExpanded(b.badge_id));
             row.addEventListener('keydown', e => {
-                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    toggleExpanded(b.badge_id);
+                }
             });
             gridBody.appendChild(row);
             if (isOpen) gridBody.appendChild(detailRow(b, cols));
