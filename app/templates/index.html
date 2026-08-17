@@ -131,7 +131,7 @@
                         <td>{{ row.room }}</td>
                         <td>{{ row.game }}</td>
                         <td class="count"><strong>{{ row.held }}</strong> <span class="muted small">of {{ row.level_count }}</span></td>
-                        <td>{% for lvl in row.levels %}<span class="level-chip record">{{ lvl }}</span> {% endfor %}</td>
+                        <td>{% for lvl in row.levels %}<span class="level-chip record" title="Level {{ lvl.n }} &mdash; {% if lvl.date %}record set {{ lvl.date }}{% else %}already held at the first poll, date unknown{% endif %}">{{ lvl.n }}</span> {% endfor %}</td>
                     </tr>
                     {% endfor %}
                     {% endfor %}
@@ -142,7 +142,10 @@
             Level numbers are the site's own. A record means the player's best equals that
             location's top score &mdash; an exact tie counts, and so does a score that beat the
             board since the last room walk. The <a href="/games">Games</a> page marks the same
-            levels with a crown in its per-level breakdown.
+            levels with a crown in its per-level breakdown. Hover a level number for
+            the day the record was set &mdash; the day of play, one behind the poll that
+            first saw the score. A record already standing at the player's first poll
+            says so instead: it was set before tracking began, and there is no date to give.
         </p>
     </details>
 </section>

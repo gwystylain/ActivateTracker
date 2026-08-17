@@ -398,6 +398,17 @@ both `prefers-reduced-motion: no-preference` and an `@supports (background-clip:
 without the guard a browser lacking the property would render invisible numbers rather than
 unstyled ones.
 
+Each record chip on the dashboard carries the day it was set in its `title`. `_record_dates`
+derives it by walking that player-location's snapshots oldest-first and taking the first one whose
+score for the level reached its current value — sound only because Activate banks the best-ever
+run, so a level's stored high never falls. The date is `streak.activity_day(polled_at)`, the same
+one-day backdate the visit rows and chart points get, so a record and the visit that set it agree.
+A level already at its current value in the player's *earliest* snapshot has no observed
+transition and gets no date — it was set at some unknown point before tracking, and the chip says
+so rather than naming the first poll. That is the `earned_on` rule for badges, applied to scores.
+The walk stops as soon as every held level is accounted for, which on an unchanged board is the
+first row read.
+
 `public._beaten_levels` (raw_scores_json → `{(game_id, level_id): high}`, dropping zeros) and
 `public._latest_snapshots` (newest snapshot per visible player at a location) are shared by
 `_build_records` and `/api/game-data`; the zero-is-no-score rule lives in the former only.

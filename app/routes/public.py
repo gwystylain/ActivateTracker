@@ -532,13 +532,16 @@ def _build_records(conn) -> list[dict[str, Any]]:
 
         for r in _latest_snapshots(conn, loc["location_id"]):
             held: dict[int, list[int]] = defaultdict(list)
+            scores: dict[tuple[int, int], int] = {}
             for (game_id, level_id), high in _beaten_levels(r["raw_scores_json"]).items():
                 top = top_scores.get(game_id, {}).get(level_id)
                 if not top or high < top or game_id not in games:
                     continue
                 held[game_id].append(level_id)
+                scores[(game_id, level_id)] = high
             if not held:
                 continue
+            set_on = _record_dates(conn, r["player_id"], loc["location_id"], scores)
 
             player = by_player.setdefault(
                 r["player_id"],
@@ -561,7 +564,12 @@ def _build_records(conn) -> list[dict[str, Any]]:
                         "held": len(levels),
                         "level_count": level_count,
                         # Level ids are 0-based in the data; the site numbers from 1.
-                        "levels": [lvl + 1 for lvl in sorted(levels)],
+                        # `date` is when the current score was first observed,
+                        # None when it predates tracking (see _record_dates).
+                        "levels": [
+                            {"n": lvl + 1, "date": set_on.get((game_id, lvl))}
+                            for lvl in sorted(levels)
+                        ],
                     }
                 )
 
@@ -569,6 +577,47 @@ def _build_records(conn) -> list[dict[str, Any]]:
     for player in out:
         # Grouped by location, biggest holdings first within each.
         player["rows"].sort(key=lambda r: (r["location"], -r["held"], r["room"], r["game"]))
+    return out
+
+
+def _record_dates(
+    conn, player_id: int, location_id: int, scores: dict[tuple[int, int], int]
+) -> dict[tuple[int, int], str]:
+    """When each held score was first observed, as an activity day.
+
+    Activate banks only the best-ever run, so a level's stored high is
+    monotonic: the day the record was set is the first snapshot in which it
+    reached its current value. Dated with `streak.activity_day` for the same
+    reason the visit rows are — the poll sees yesterday's play.
+
+    A level already at its current value in the player's *earliest* snapshot
+    has no observed transition: it was set at some unknown point before
+    tracking, so it is left out rather than backdated to the first poll, the
+    same rule `earned_on` follows for badges. Walking stops as soon as every
+    level is accounted for, which for an unchanged board is the first row.
+    """
+    if not scores:
+        return {}
+
+    pending = dict(scores)
+    out: dict[tuple[int, int], str] = {}
+    cur = conn.execute(
+        """
+        SELECT polled_at, raw_scores_json
+        FROM score_snapshots
+        WHERE player_id = ? AND location_id = ?
+        ORDER BY polled_at, id
+        """,
+        (player_id, location_id),
+    )
+    for i, row in enumerate(cur):
+        if not pending:
+            break
+        beaten = _beaten_levels(row["raw_scores_json"])
+        for key in [k for k, target in pending.items() if beaten.get(k, 0) >= target]:
+            del pending[key]
+            if i:  # the first snapshot is "already held", not a transition
+                out[key] = streak_mod.activity_day(row["polled_at"]).isoformat()
     return out
 
 

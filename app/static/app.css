@@ -197,6 +197,8 @@ table.records td.count { font-variant-numeric: tabular-nums; }
     color: var(--gold); background: rgba(227, 179, 65, 0.12);
     border-color: rgba(227, 179, 65, 0.45);
 }
+/* Every record chip carries the date it was set in its title. */
+.level-chip[title] { cursor: help; }
 /* Crown count on a collapsed gamemode row — says which rows are worth opening. */
 .rec-badge { margin-left: 8px; color: var(--gold); font-size: 0.85em; white-space: nowrap; }
 

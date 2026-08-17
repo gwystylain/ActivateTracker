@@ -381,7 +381,9 @@ def test_records_are_the_levels_where_the_player_matches_the_top_score(tmp_path)
             "game": "Barrage",
             "held": 1,
             "level_count": 3,
-            "levels": [1],   # level ids are 0-based; the site numbers from 1
+            # Level ids are 0-based; the site numbers from 1. One snapshot only,
+            # so the score predates tracking and carries no date.
+            "levels": [{"n": 1, "date": None}],
         }
     ]
 
@@ -410,7 +412,7 @@ def test_records_include_a_score_above_a_stale_top(tmp_path):
                  [{"gameId": 1003, "levelId": 1, "highScore": 5000}])   # top is 3046
 
     (player,) = _build_records(conn)
-    assert player["rows"][0]["levels"] == [2]
+    assert player["rows"][0]["levels"] == [{"n": 2, "date": None}]
 
 
 def test_records_span_locations_and_use_the_newest_snapshot(tmp_path):
@@ -428,11 +430,60 @@ def test_records_span_locations_and_use_the_newest_snapshot(tmp_path):
                   {"gameId": 1003, "levelId": 0, "highScore": 2062}])
 
     (player,) = _build_records(conn)
-    assert [(r["location"], r["levels"]) for r in player["rows"]] == [
+    assert [
+        (r["location"], [lvl["n"] for lvl in r["levels"]]) for r in player["rows"]
+    ] == [
         ("Coquitlam", [1, 2]),
         ("Langley", [1]),
     ]
     assert player["total"] == 3
+
+
+def test_records_date_the_snapshot_that_first_showed_the_score(tmp_path):
+    """The record's date is the day of play — one behind the poll that saw it."""
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _seed_catalog(conn)
+    _snap_scores(conn, pid, 72, "2026-08-01T00:00:00",
+                 [{"gameId": 1003, "levelId": 0, "highScore": 1500}])
+    _snap_scores(conn, pid, 72, "2026-08-05T00:00:00",
+                 [{"gameId": 1003, "levelId": 0, "highScore": 2062}])
+    _snap_scores(conn, pid, 72, "2026-08-09T00:00:00",
+                 [{"gameId": 1003, "levelId": 0, "highScore": 2062}])
+
+    (player,) = _build_records(conn)
+    assert player["rows"][0]["levels"] == [{"n": 1, "date": "2026-08-04"}]
+
+
+def test_records_held_since_before_tracking_carry_no_date(tmp_path):
+    """No observed transition on the first poll, so there is nothing to date."""
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _seed_catalog(conn)
+    for polled in ("2026-08-01T00:00:00", "2026-08-05T00:00:00"):
+        _snap_scores(conn, pid, 72, polled,
+                     [{"gameId": 1003, "levelId": 0, "highScore": 2062}])
+
+    (player,) = _build_records(conn)
+    assert player["rows"][0]["levels"] == [{"n": 1, "date": None}]
+
+
+def test_records_date_each_level_separately(tmp_path):
+    """Two records on one gamemode, set on different days."""
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _seed_catalog(conn)
+    _snap_scores(conn, pid, 72, "2026-08-01T00:00:00",
+                 [{"gameId": 1003, "levelId": 0, "highScore": 2062}])
+    _snap_scores(conn, pid, 72, "2026-08-05T00:00:00",
+                 [{"gameId": 1003, "levelId": 0, "highScore": 2062},
+                  {"gameId": 1003, "levelId": 1, "highScore": 3046}])
+
+    (player,) = _build_records(conn)
+    assert player["rows"][0]["levels"] == [
+        {"n": 1, "date": None},          # already held at the first poll
+        {"n": 2, "date": "2026-08-04"},  # appeared later, so it has a date
+    ]
 
 
 def test_records_omit_players_and_locations_with_nothing_held(tmp_path):
