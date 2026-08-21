@@ -71,6 +71,50 @@ class BadgeConfig(BaseModel):
     enabled: bool = True
     api_base: str = "https://api.ryflix.ca/api/badges"
 
+    # This leg gets its own spacing rather than sharing `poll.jitter_seconds`
+    # (0.5-2.0s), which is tuned for a Cloudflare-fronted site that served 28
+    # score pages back to back without complaint. The badge proxy is somebody's
+    # personal server and rate-limits far harder: observed live, five handles
+    # landed and every one after was refused with an instant 429, still refusing
+    # 16 seconds after the first request. ~15s apart keeps a dozen handles
+    # inside 5/minute and puts the whole leg under three minutes, which a daily
+    # poll doesn't notice.
+    spacing_seconds: tuple[float, float] = (12.0, 18.0)
+
+    # A 429 is waited out rather than lost. Without this the handles that lose
+    # are the ones at the back of a stable queue, every night, which is how a
+    # player's badge row goes ten days stale while the dashboard shows a count
+    # that was true when it was written.
+    max_retries: int = 3
+    backoff_seconds: float = 30.0
+    # But never wait longer than this in one go, whatever `Retry-After` asks
+    # for. A poll holds a global lock, so an hour-long sleep would block the
+    # scheduler and the admin's Refresh button behind it; tomorrow's poll is a
+    # better place to try again than the inside of today's.
+    max_wait_seconds: float = 120.0
+
+    @field_validator("spacing_seconds")
+    @classmethod
+    def _check_spacing(cls, v: tuple[float, float]) -> tuple[float, float]:
+        lo, hi = v
+        if lo < 0 or hi < lo:
+            raise ValueError("badges.spacing_seconds must be (lo, hi) with 0 <= lo <= hi")
+        return v
+
+    @field_validator("max_retries")
+    @classmethod
+    def _check_retries(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("badges.max_retries must be >= 0")
+        return v
+
+    @field_validator("backoff_seconds", "max_wait_seconds")
+    @classmethod
+    def _check_positive(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError("badge backoff/wait seconds must be >= 0")
+        return v
+
 
 class ServerConfig(BaseModel):
     trusted_proxy_hops: int = 1

@@ -45,6 +45,77 @@ def format_handles(handles: list[str]) -> str:
     return ", ".join(handles)
 
 
+def badge_order(
+    conn: sqlite3.Connection, seen_players: dict[int, list[str]]
+) -> list[tuple[int, list[str]]]:
+    """Players in staleness order: never fetched first, then oldest first.
+
+    The badge leg used to run in score-poll order, which is stable — so when the
+    proxy's rate limit cut the leg short it cut the *same* players short every
+    night and they starved, one of them never having had a single successful
+    fetch. Sorting by what we already hold makes that self-correcting: whoever
+    lost last night is first in line tonight, and a limit that only allows five
+    handles through rotates over the roster instead of pinning it.
+
+    Ties break on player id purely so the order is deterministic.
+    """
+    freshness = {
+        r["player_id"]: r["updated_at"]
+        for r in conn.execute(
+            "SELECT player_id, MAX(updated_at) AS updated_at"
+            " FROM player_badges GROUP BY player_id"
+        ).fetchall()
+    }
+    # "" sorts before any ISO timestamp, so a player with no badge rows at all
+    # leads — that is the one whose fetch has never once succeeded.
+    return sorted(
+        seen_players.items(), key=lambda kv: (freshness.get(kv[0]) or "", kv[0])
+    )
+
+
+async def fetch_badges_with_retry(
+    handle: str,
+    *,
+    session: AsyncSession,
+    badge_cfg: BadgeConfig,
+    timeout: float,
+) -> list[scraper.BadgeState]:
+    """`scraper.fetch_badges`, with a 429 waited out instead of lost.
+
+    Only `RateLimited` is retried: it is the one failure that says nothing about
+    the request, so asking again later is the whole fix. A 404 or a 500 means
+    the handle is wrong or the upstream is down, and hammering either is rude
+    and pointless.
+
+    The wait is the response's own `Retry-After` when it sent one, otherwise a
+    doubling backoff from `backoff_seconds`. A wait longer than
+    `max_wait_seconds` gives up rather than sleeping it off, because a poll
+    holds a global lock: an hour inside this function is an hour the scheduler
+    and the admin's Refresh button spend blocked, to save one day of staleness
+    on one player's badges.
+    """
+    delay = badge_cfg.backoff_seconds
+    for attempt in range(badge_cfg.max_retries + 1):
+        try:
+            return await scraper.fetch_badges(
+                handle,
+                session=session,
+                base=badge_cfg.api_base,
+                timeout=timeout,
+            )
+        except scraper.RateLimited as e:
+            wait = e.retry_after if e.retry_after is not None else delay
+            if attempt >= badge_cfg.max_retries or wait > badge_cfg.max_wait_seconds:
+                raise
+            log.info(
+                "badge fetch rate-limited handle=%s waiting %.1fs (attempt %d/%d)",
+                handle, wait, attempt + 1, badge_cfg.max_retries,
+            )
+            await asyncio.sleep(wait)
+            delay *= 2
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
 async def poll_all(
     conn: sqlite3.Connection,
     poll_cfg: PollConfig,
@@ -96,6 +167,7 @@ async def poll_all(
             "badges_fetched": 0,
             "badges_newly_earned": 0,
             "badges_errors": 0,
+            "badges_skipped": 0,
         }
         if not rows:
             return counters
@@ -171,17 +243,21 @@ async def poll_all(
             # one leg that leaves playactivate.com for a third party's proxy, so
             # a caller has to ask for them rather than get them by default.
             if badge_cfg is not None and badge_cfg.enabled:
-                base = badge_cfg.api_base
-                for player_id, handles in seen_players.items():
+                badge_lo, badge_hi = badge_cfg.spacing_seconds
+                first_badge = True
+                for player_id, handles in badge_order(conn, seen_players):
                     per_handle: list[list[scraper.BadgeState]] = []
+                    failed = 0
                     for handle in handles:
-                        await asyncio.sleep(random.uniform(jitter_lo, jitter_hi))
+                        if not first_badge:
+                            await asyncio.sleep(random.uniform(badge_lo, badge_hi))
+                        first_badge = False
                         try:
                             per_handle.append(
-                                await scraper.fetch_badges(
+                                await fetch_badges_with_retry(
                                     handle,
                                     session=session,
-                                    base=base,
+                                    badge_cfg=badge_cfg,
                                     timeout=poll_cfg.request_timeout_sec,
                                 )
                             )
@@ -189,11 +265,27 @@ async def poll_all(
                             # Badges come from a third party's proxy, so they are
                             # the least reliable leg of the poll and must never
                             # take the scores down — those are already committed.
+                            failed += 1
                             counters["badges_errors"] += 1
                             log.warning(
                                 "badge fetch failed handle=%s err=%s", handle, e
                             )
-                    if not per_handle:
+                    # `not per_handle` also covers a player with no handles at
+                    # all, who would otherwise be "fetched" with an empty list.
+                    if failed or not per_handle:
+                        # A partial answer is not authoritative. `persist_badges`
+                        # writes `earned` from what it is handed, so persisting
+                        # one handle of a two-handle player would clear every
+                        # badge only the other profile holds — `combine_badges`
+                        # can only OR together what it was given. Last poll's
+                        # rows are older but true; these would be wrong, and the
+                        # page's "As of" column says which it is showing.
+                        if per_handle:
+                            counters["badges_skipped"] += 1
+                            log.warning(
+                                "badge write skipped player=%s: %d of %d handles failed",
+                                player_id, failed, len(handles),
+                            )
                         continue
                     try:
                         got = persist_badges(

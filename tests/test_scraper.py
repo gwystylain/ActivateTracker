@@ -3,18 +3,23 @@ from pathlib import Path
 
 import pytest
 
+from datetime import datetime, timezone
+
 from app.scraper import (
     BadgeState,
     FetchError,
+    RateLimited,
     ScrapeError,
     ScrapeResult,
     badges_from_trophy_progress,
     combine_badges,
     combine_results,
     extract_player_blob,
+    fetch_badges,
     parse_badges,
     parse_html,
     parse_room_html,
+    retry_after_seconds,
     room_slug,
 )
 
@@ -355,3 +360,78 @@ def test_combining_handles_unions_earned_and_keeps_the_best_progress():
 
     assert merged[1].earned is True
     assert (merged[2].earned, merged[2].progress) == (False, 19)
+
+
+# ---------- rate limiting ----------
+
+class _Resp:
+    def __init__(self, status_code, *, headers=None, payload=None):
+        self.status_code = status_code
+        self.headers = headers or {}
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+class _OneShotSession:
+    """Enough of AsyncSession to answer exactly one request."""
+
+    def __init__(self, resp):
+        self._resp = resp
+        self.urls = []
+
+    async def get(self, url, **kw):
+        self.urls.append(url)
+        return self._resp
+
+
+async def test_a_429_is_a_rate_limit_not_a_dead_handle():
+    """The badge proxy answers a 429 in milliseconds without touching its
+    upstream, and the same handle works once the window rolls. Treating it like
+    a 404 is what left a player's badges ten days stale."""
+    session = _OneShotSession(_Resp(429, headers={"Retry-After": "45"}))
+
+    with pytest.raises(RateLimited) as exc:
+        await fetch_badges("ikeaboy", session=session, timeout=1.0)
+
+    assert exc.value.retry_after == 45.0
+    assert isinstance(exc.value, FetchError)   # still a fetch failure
+
+
+async def test_a_429_without_a_retry_after_leaves_the_wait_to_the_caller():
+    session = _OneShotSession(_Resp(429))
+
+    with pytest.raises(RateLimited) as exc:
+        await fetch_badges("ikeaboy", session=session, timeout=1.0)
+
+    assert exc.value.retry_after is None
+
+
+async def test_other_http_failures_are_not_rate_limits():
+    """A 500 means stop asking; only a 429 means ask again later."""
+    session = _OneShotSession(_Resp(500))
+
+    with pytest.raises(FetchError) as exc:
+        await fetch_badges("ikeaboy", session=session, timeout=1.0)
+
+    assert not isinstance(exc.value, RateLimited)
+
+
+def test_retry_after_reads_both_forms_the_rfc_allows():
+    now = datetime(2026, 8, 21, 11, 0, tzinfo=timezone.utc)
+    assert retry_after_seconds("30") == 30.0
+    assert retry_after_seconds("Fri, 21 Aug 2026 11:01:00 GMT", now=now) == 60.0
+
+
+def test_a_retry_after_already_past_means_go_now_not_a_negative_sleep():
+    now = datetime(2026, 8, 21, 11, 0, tzinfo=timezone.utc)
+    assert retry_after_seconds("Fri, 21 Aug 2026 10:59:00 GMT", now=now) == 0.0
+    assert retry_after_seconds("-5") == 0.0
+
+
+def test_an_unreadable_retry_after_is_no_answer_rather_than_a_made_up_one():
+    assert retry_after_seconds(None) is None
+    assert retry_after_seconds("") is None
+    assert retry_after_seconds("soon") is None
+

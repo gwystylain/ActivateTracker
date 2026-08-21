@@ -10,6 +10,8 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import quote
 
@@ -339,6 +341,14 @@ async def fetch_badges(
     url = f"{base.rstrip('/')}/activate-sync/{quote(handle, safe='')}"
     log.info("fetch badges url=%s", url)
     resp = await session.get(url, impersonate=IMPERSONATE, timeout=timeout)
+    if resp.status_code == 429:
+        # Distinct from the catch-all below because it is not a verdict on the
+        # handle: the proxy answers this one in milliseconds without touching
+        # its upstream, and the same handle succeeds once the window rolls.
+        raise RateLimited(
+            f"HTTP 429 for {url}",
+            retry_after=retry_after_seconds(resp.headers.get("Retry-After")),
+        )
     if resp.status_code >= 400:
         raise FetchError(f"HTTP {resp.status_code} for {url}")
     try:
@@ -416,6 +426,54 @@ async def fetch(
 
 class FetchError(Exception):
     """Raised when the HTTP request itself fails (status, connection, timeout)."""
+
+
+class RateLimited(FetchError):
+    """A 429: the server refused because we asked too often, not because the
+    request was wrong.
+
+    Separate from a plain `FetchError` because the two want opposite handling —
+    a 404 or a 500 means stop asking, a 429 means ask again later. Only the
+    badge proxy raises it: playactivate.com served 28 score pages back to back
+    without complaint, while somebody's personal server let five badge requests
+    through and refused the next six.
+
+    `retry_after` is the seconds the response asked us to wait, or None if it
+    didn't say. Honour it when present — guessing at a stranger's rate limit is
+    how you get banned from it.
+    """
+
+    def __init__(self, message: str, *, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def retry_after_seconds(raw: Any, *, now: datetime | None = None) -> float | None:
+    """Seconds to wait, from a `Retry-After` header value.
+
+    RFC 9110 allows either a delta in seconds or an HTTP-date, and both turn up
+    in the wild. A date already in the past yields 0.0 — "go now" — rather than
+    a negative sleep. Anything unparseable is None, which leaves the caller on
+    its own backoff instead of on a number it made up.
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    try:
+        return max(0.0, float(text))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (when - (now or datetime.now(timezone.utc))).total_seconds())
 
 
 def room_slug(room_name: str) -> str:

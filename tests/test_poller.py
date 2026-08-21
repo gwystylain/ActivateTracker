@@ -6,7 +6,7 @@ from app import db as db_mod
 from app import poller as poller_mod
 from app.config import BadgeConfig, PollConfig
 from app.poller import format_handles, parse_handles, persist_snapshot
-from app.scraper import BadgeState, ScrapeResult
+from app.scraper import BadgeState, RateLimited, ScrapeResult
 
 
 def _conn(tmp_path):
@@ -503,3 +503,212 @@ async def test_badges_are_skipped_without_a_config(tmp_path, monkeypatch):
         conn, PollConfig(jitter_seconds=(0.0, 0.0)),
         badge_cfg=BadgeConfig(enabled=False),
     )
+
+
+# ---------- badges: the proxy's rate limit ----------
+
+def _no_sleep(monkeypatch):
+    """Swallow every await asyncio.sleep and record what it was asked to wait."""
+    slept = []
+
+    async def fake_sleep(seconds):
+        slept.append(seconds)
+
+    monkeypatch.setattr(poller_mod.asyncio, "sleep", fake_sleep)
+    return slept
+
+
+def _badge_cfg(**kw):
+    """A badge config with the production waits stripped out."""
+    return BadgeConfig(**{"spacing_seconds": (0.0, 0.0), "backoff_seconds": 5.0, **kw})
+
+
+async def test_a_rate_limited_badge_fetch_is_waited_out_not_lost(tmp_path, monkeypatch):
+    """The proxy lets five handles through and refuses the rest with an instant
+    429. Dropping those is what pinned the same players' badges ten days stale,
+    since the fetch order was stable and so the losers never changed."""
+    conn = _conn(tmp_path)
+    _insert_player(conn)
+    _wire_poll(monkeypatch, {"gmebagholder": 100})
+    slept = _no_sleep(monkeypatch)
+    attempts = []
+
+    async def fake_badges(handle, *, session, base, timeout):
+        attempts.append(handle)
+        if len(attempts) == 1:
+            raise RateLimited("HTTP 429", retry_after=None)
+        return _states((1, True), (2, False))
+
+    monkeypatch.setattr(poller_mod.scraper, "fetch_badges", fake_badges)
+
+    counters = await poller_mod.poll_all(
+        conn, PollConfig(jitter_seconds=(0.0, 0.0)), badge_cfg=_badge_cfg()
+    )
+
+    assert attempts == ["gmebagholder", "gmebagholder"]
+    assert counters["badges_fetched"] == 1
+    assert counters["badges_errors"] == 0
+    assert 5.0 in slept                       # the configured backoff, not a guess
+    assert conn.execute("SELECT COUNT(*) FROM player_badges").fetchone()[0] == 2
+
+
+async def test_the_proxys_own_retry_after_beats_our_backoff(tmp_path, monkeypatch):
+    """Guessing at a stranger's rate limit is how you get banned from it."""
+    conn = _conn(tmp_path)
+    _insert_player(conn)
+    _wire_poll(monkeypatch, {"gmebagholder": 100})
+    slept = _no_sleep(monkeypatch)
+    attempts = []
+
+    async def fake_badges(handle, *, session, base, timeout):
+        attempts.append(handle)
+        if len(attempts) == 1:
+            raise RateLimited("HTTP 429", retry_after=47.0)
+        return _states((1, True))
+
+    monkeypatch.setattr(poller_mod.scraper, "fetch_badges", fake_badges)
+
+    await poller_mod.poll_all(
+        conn, PollConfig(jitter_seconds=(0.0, 0.0)), badge_cfg=_badge_cfg()
+    )
+
+    assert 47.0 in slept
+    assert 5.0 not in slept
+
+
+async def test_retries_are_bounded_and_the_failure_is_still_counted(tmp_path, monkeypatch):
+    conn = _conn(tmp_path)
+    _insert_player(conn)
+    _wire_poll(monkeypatch, {"gmebagholder": 100})
+    _no_sleep(monkeypatch)
+    attempts = []
+
+    async def fake_badges(handle, *, session, base, timeout):
+        attempts.append(handle)
+        raise RateLimited("HTTP 429", retry_after=None)
+
+    monkeypatch.setattr(poller_mod.scraper, "fetch_badges", fake_badges)
+
+    counters = await poller_mod.poll_all(
+        conn,
+        PollConfig(jitter_seconds=(0.0, 0.0)),
+        badge_cfg=_badge_cfg(max_retries=2),
+    )
+
+    assert len(attempts) == 3                 # the first try plus two retries
+    assert counters["badges_errors"] == 1
+    assert counters["badges_fetched"] == 0
+    assert counters["polled"] == 1            # scores landed anyway
+
+
+async def test_a_wait_longer_than_the_poll_can_afford_is_not_slept_off(tmp_path, monkeypatch):
+    """A poll holds a global lock. An hour in here is an hour the scheduler and
+    the admin's Refresh button spend blocked - tomorrow's poll is a better place
+    to try again than the inside of today's."""
+    conn = _conn(tmp_path)
+    _insert_player(conn)
+    _wire_poll(monkeypatch, {"gmebagholder": 100})
+    slept = _no_sleep(monkeypatch)
+    attempts = []
+
+    async def fake_badges(handle, *, session, base, timeout):
+        attempts.append(handle)
+        raise RateLimited("HTTP 429", retry_after=3600.0)
+
+    monkeypatch.setattr(poller_mod.scraper, "fetch_badges", fake_badges)
+
+    counters = await poller_mod.poll_all(
+        conn,
+        PollConfig(jitter_seconds=(0.0, 0.0)),
+        badge_cfg=_badge_cfg(max_wait_seconds=120.0),
+    )
+
+    assert len(attempts) == 1                 # gave up rather than waiting it out
+    assert 3600.0 not in slept
+    assert counters["badges_errors"] == 1
+
+
+async def test_only_a_429_is_retried(tmp_path, monkeypatch):
+    """A 404 or a 500 says the handle is wrong or the upstream is down.
+    Hammering either is rude and pointless."""
+    conn = _conn(tmp_path)
+    _insert_player(conn)
+    _wire_poll(monkeypatch, {"gmebagholder": 100})
+    _no_sleep(monkeypatch)
+    attempts = []
+
+    async def fake_badges(handle, *, session, base, timeout):
+        attempts.append(handle)
+        raise poller_mod.scraper.FetchError("HTTP 500")
+
+    monkeypatch.setattr(poller_mod.scraper, "fetch_badges", fake_badges)
+
+    counters = await poller_mod.poll_all(
+        conn, PollConfig(jitter_seconds=(0.0, 0.0)), badge_cfg=_badge_cfg()
+    )
+
+    assert len(attempts) == 1
+    assert counters["badges_errors"] == 1
+
+
+async def test_one_handle_failing_does_not_wipe_the_others_badges(tmp_path, monkeypatch):
+    """`combine_badges` can only OR together what it was handed, and
+    `persist_badges` writes `earned` from that. So persisting one handle of a
+    two-handle player would clear every badge only the other profile holds -
+    last poll's rows are older but true, these would be wrong."""
+    conn = _conn(tmp_path)
+    pid = conn.execute(
+        "INSERT INTO players (handle) VALUES (?)", ("gmebagholder, kavo",)
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO player_locations (player_id, location_id, slug)"
+        " VALUES (?, 72, 'langley')",
+        (pid,),
+    )
+    # Last night, when both handles answered: badge 2 is kavo's.
+    poller_mod.persist_badges(conn, pid, _states((1, True), (2, True)))
+
+    _wire_poll(monkeypatch, {"gmebagholder": 100, "kavo": 200})
+    _no_sleep(monkeypatch)
+
+    async def fake_badges(handle, *, session, base, timeout):
+        if handle == "kavo":
+            raise RateLimited("HTTP 429", retry_after=None)
+        return _states((1, True), (2, False))
+
+    monkeypatch.setattr(poller_mod.scraper, "fetch_badges", fake_badges)
+
+    counters = await poller_mod.poll_all(
+        conn,
+        PollConfig(jitter_seconds=(0.0, 0.0)),
+        badge_cfg=_badge_cfg(max_retries=0),
+    )
+
+    earned = dict(
+        conn.execute("SELECT badge_id, earned FROM player_badges").fetchall()
+    )
+    assert earned == {1: 1, 2: 1}             # kavo's badge survives the poll
+    assert counters["badges_skipped"] == 1
+    assert counters["badges_fetched"] == 0    # nothing was written at all
+
+
+def test_the_stalest_player_goes_first_so_the_same_ones_cannot_starve(tmp_path):
+    """The fetch order used to be the score-poll order, which is stable - so a
+    rate limit that cuts the leg short cut the same players short every night.
+    Whoever lost last night leads tonight."""
+    conn = _conn(tmp_path)
+    fresh = conn.execute("INSERT INTO players (handle) VALUES ('fresh')").lastrowid
+    stale = conn.execute("INSERT INTO players (handle) VALUES ('stale')").lastrowid
+    never = conn.execute("INSERT INTO players (handle) VALUES ('never')").lastrowid
+
+    poller_mod.persist_badges(
+        conn, fresh, _states((1, True)),
+        now=datetime(2026, 8, 21, 11, 0, tzinfo=timezone.utc),
+    )
+    poller_mod.persist_badges(
+        conn, stale, _states((1, True)),
+        now=datetime(2026, 8, 11, 11, 0, tzinfo=timezone.utc),
+    )
+
+    seen = {fresh: ["fresh"], stale: ["stale"], never: ["never"]}
+    assert [pid for pid, _ in poller_mod.badge_order(conn, seen)] == [never, stale, fresh]

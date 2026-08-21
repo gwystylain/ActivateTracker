@@ -34,6 +34,15 @@ badges:
   # dashboard's badge count then falls back to the score page's own tally).
   enabled: true
   api_base: "https://api.ryflix.ca/api/badges"
+  # Being somebody's personal server, it rate-limits far harder than
+  # playactivate.com does: five handles land and the rest come straight back as
+  # 429 until the window rolls. So this leg gets its own spacing rather than
+  # sharing poll.jitter_seconds, and a 429 is waited out rather than dropped —
+  # otherwise the handles at the back of the queue lose every single night.
+  spacing_seconds: [12.0, 18.0]  # min/max delay between badge requests
+  max_retries: 3                 # retries after a 429 (other errors: none)
+  backoff_seconds: 30.0          # first wait, doubling; a Retry-After wins
+  max_wait_seconds: 120.0        # longer than this, give up: a poll holds a lock
 
 server:
   # Number of trusted reverse-proxy hops in front of the app (e.g. nginx-proxy-manager = 1).

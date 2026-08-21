@@ -279,6 +279,36 @@ reaches a third party by omission. A badge failure increments `badges_errors` an
 fails the score poll, the same treatment the catalog gets. If the proxy disappears the
 dashboard's count survives on `trophyProgress` and only the per-badge detail goes stale.
 
+### The badge proxy rate-limits, and the losers used to be the same every night
+Being one person's server, it is far stricter than playactivate.com, which serves 28 score
+pages back to back without complaint. Observed live: five handles landed, the sixth and
+everything after came back `HTTP 429` in ~6ms — answered by a limiter, not by the upstream —
+and it was still refusing 16 seconds after the first request, so the window is minutes, not
+seconds. So the badge leg has its own `badges.spacing_seconds` (~15s) instead of sharing
+`poll.jitter_seconds` (0.5–2.0s), which puts a dozen handles inside 5/minute and the whole
+leg under three minutes.
+
+`scraper.RateLimited` exists to keep that apart from an ordinary `FetchError`: a 429 says
+nothing about the request and the same handle works later, where a 404 or 500 means stop
+asking. Only the former is retried, waiting the response's own `Retry-After` when it sends
+one (`scraper.retry_after_seconds` handles both RFC forms) and a doubling backoff when it
+doesn't. A wait over `max_wait_seconds` gives up instead: a poll holds `_poll_lock`, so an
+hour asleep here is an hour the scheduler and the admin's Refresh button spend blocked, to
+save one day of staleness on one player's badges.
+
+Dropping a 429 was not merely lossy, it was *unfair*: the leg ran in score-poll order, which
+is stable, so the same players lost every night — two sat ten days stale and one had never
+had a single successful fetch, while the dashboard showed counts that were true when written.
+`poller.badge_order` now runs stalest-first (no rows at all leads), so whoever lost last
+night is first in line tonight and a short window rotates over the roster instead of pinning
+it. Note that hidden players are polled too and consume the same budget.
+
+**A partial answer is never persisted.** `combine_badges` can only OR together what it was
+handed and `persist_badges` writes `earned` from that, so writing one handle of a two-handle
+player would clear every badge only the other profile holds. If any of a player's handles
+failed, the write is skipped entirely (`badges_skipped`) and last poll's rows stand — older
+but true, and `/badges` states the date it is showing.
+
 Four traps, all of them load-bearing:
 
 - **`badge_id` is the key, never `name`.** The API returns 118 badges under 117 names:
