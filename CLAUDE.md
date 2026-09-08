@@ -229,7 +229,9 @@ answer, just less settled.
 catalog — it is keyed by name, not something the site told us, so it has no business in a table
 that mirrors upstream. Front-end: `games.js:modeName` marks up any *described* name with
 `.mode-name` (the dotted underline is therefore the promise that there is something to read), and
-one shared `position: fixed` bubble on `<body>` is refilled and moved. Fixed and body-level because
+one shared `position: fixed` bubble on `<body>` is refilled and moved. Expanding a gamemode in the
+level breakdown leads with a `Description` row before the levels, because the bubble needs a
+pointer and expanding is the only gesture a touch screen has — see the hover rule below. Fixed and body-level because
 the cards live inside `.table-wrap { overflow-x: auto }`, which would clip an in-cell popover, and
 because every row is destroyed on each render — hence delegated listeners and a `hideTip()` at the
 top of `render`/`renderLevels`. The name is a tab stop **only** in Point Farmer and Never scored;
@@ -393,6 +395,27 @@ location) is earned all the same. Both cases are live in the current data, which
 the page says "no scoring room for it at your tracked locations" rather than "you can't
 get this", never makes the negative claim about a badge somebody has already earned, and
 never hides one behind the checkbox on that basis.
+
+### The description bubble is a pointer's shortcut, never the only way in
+A long press is the only gesture a touch screen has for the hover bubble, and it is the
+text-selection gesture too, so on a phone the bubble is a fight to summon and a fight to
+dismiss. The rule is therefore that no description lives *only* in the bubble:
+
+- Where the name sits in a row that expands — the `/badges` grid and Badge farmer, the
+  `/games` level breakdown — the panel that row opens carries a `Description` line, and the
+  bubble is skipped on a device that cannot hover (`tipWanted`, in both `badges.js` and
+  `games.js`, read at event time so plugging in a mouse changes the answer). The dotted
+  underline goes with it, under `@media (hover: none)`: the underline is the promise of
+  something to read, and there the row's own ▸ is the affordance instead.
+- Where the name is its own control — `/badges` Closest to earning, `/games` Point farmer
+  and Never scored, the three calls that pass `focusable` and so carry a `tabindex` — there
+  is no panel to expand, but a tap focuses the name and the focus path opens the bubble.
+  Those keep both the bubble and the underline on touch. `[tabindex]` is what tells the two
+  cases apart, in the CSS as much as the JS.
+
+The `/badges` panel's `Description` is Activate's own wording, not a community field, so it
+sits *above* the empty-panel message rather than replacing it: a badge can have a description
+from Activate and still have nothing recorded by the documents.
 
 ### The page never scrolls sideways; .table-wrap does
 Wide content is reached by scrolling the table, never the document, so `html` carries

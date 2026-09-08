@@ -84,6 +84,19 @@
     document.body.appendChild(tip);
     let tipOn = null;       // element currently carrying aria-describedby
     let tipAnchor = null;   // element the bubble is placed against
+    const canHover = window.matchMedia('(hover: hover)');
+
+    // Whether the bubble is this name's way of being read. On a touch screen
+    // the only gesture that summons it is the long press, which is also the
+    // text-selection gesture — so in the level table, where the name sits in a
+    // row that expands, the bubble is dropped and the description is read from
+    // the row that expanding adds. Where the name is its own control (Point
+    // farmer and Never scored, hence the tabindex) there is nothing to expand
+    // and a tap focuses it, so the bubble stays. Read at event time: plugging
+    // in a mouse changes the answer.
+    function tipWanted(name) {
+        return canHover.matches || name.hasAttribute('tabindex');
+    }
 
     // The gamemode's name, made hoverable when the document covers it.
     // `focusable` only where the name is the sole thing to land on: in the
@@ -141,7 +154,7 @@
     document.addEventListener('mouseover', e => {
         if (!e.target.closest || tip.contains(e.target)) return;   // reading a long one
         const name = e.target.closest('.mode-name[data-desc]');
-        if (!name) {
+        if (!name || !tipWanted(name)) {
             hideTip();
             return;
         }
@@ -155,7 +168,7 @@
         const name = e.target.matches('.mode-name[data-desc]')
             ? e.target
             : (row && row.querySelector('.mode-name[data-desc]'));
-        if (!name) {
+        if (!name || !tipWanted(name)) {
             hideTip();
             return;
         }
@@ -569,6 +582,12 @@
             }
             levelBody.appendChild(gameRow(room, game, players));
             if (expanded.has(game.game_id)) {
+                // Leads the levels, because it is the answer to "what is this
+                // gamemode" and on a touch screen expanding is the only gesture
+                // that reaches it — the hover bubble needs a pointer.
+                if (game.description) {
+                    levelBody.appendChild(descRow(game, 3 + players.length));
+                }
                 for (const lvl of game.levels) levelBody.appendChild(levelRow(game, lvl, players));
             }
         }
@@ -625,6 +644,22 @@
             }
         });
         return row;
+    }
+
+    // Same shape as an expanded badge's panel on /badges, down to the classes:
+    // one labelled line, held at the left edge of the scrolling table so it
+    // stays readable however far the columns are scrolled.
+    function descRow(game, cols) {
+        return el('tr', { className: 'detail-row' }, [
+            el('td', { attrs: { colspan: String(cols) } }, [
+                el('div', { className: 'badge-detail' }, [
+                    el('p', { className: 'detail-line' }, [
+                        el('span', { className: 'detail-label', text: 'Description' }),
+                        el('span', { text: game.description }),
+                    ]),
+                ]),
+            ]),
+        ]);
     }
 
     function levelRow(game, levelId, players) {

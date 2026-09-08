@@ -85,8 +85,21 @@
     const tip = el('div', { className: 'mode-tip', attrs: { id: 'badgeTip', role: 'tooltip' } });
     tip.hidden = true;
     document.body.appendChild(tip);
+    const canHover = window.matchMedia('(hover: hover)');
     let tipOn = null;       // element currently carrying aria-describedby
     let tipAnchor = null;   // element the bubble is placed against
+
+    // Whether the bubble is this name's way of being read. On a touch screen
+    // the only gesture that summons it is the long press, which is also the
+    // text-selection gesture — so where the name sits inside a row that expands
+    // (the farmer card and the grid) the bubble is dropped and the description
+    // is read from the panel that row opens instead. Where the name is its own
+    // control (Closest to earning, hence the tabindex) there is no panel, and a
+    // tap focuses it, so the bubble stays. Read at event time: plugging in a
+    // mouse changes the answer.
+    function tipWanted(name) {
+        return canHover.matches || name.hasAttribute('tabindex');
+    }
 
     function badgeName(badge, focusable) {
         if (!badge.description) return el('span', { text: badge.name });
@@ -133,7 +146,7 @@
     document.addEventListener('mouseover', e => {
         if (!e.target.closest || tip.contains(e.target)) return;   // reading a long one
         const name = e.target.closest('.mode-name[data-desc]');
-        if (!name) {
+        if (!name || !tipWanted(name)) {
             hideTip();
             return;
         }
@@ -149,7 +162,7 @@
         const name = e.target.matches('.mode-name[data-desc]')
             ? e.target
             : (row && row.querySelector('.mode-name[data-desc]'));
-        if (!name) {
+        if (!name || !tipWanted(name)) {
             hideTip();
             return;
         }
@@ -669,15 +682,23 @@
         // count has nothing *left* to show, since both are already in the row.
         // Only a badge they don't cover at all is a gap in the documents.
         const covered = b.difficulty || b.players || (b.rooms && b.rooms.length);
+        if (!bits.length) {
+            bits.push(el('p', { className: 'muted small', text: covered
+                // Activate's description is not one of the community fields, so
+                // it says nothing about whether the documents have caught up.
+                ? 'No room, tips or notes recorded for this badge — the columns '
+                  + 'above are all the documents have.'
+                : 'The community documents have no detail for this badge yet.' }));
+        }
+
+        // Activate's own wording for the badge, and the one field that used to
+        // live only in the hover bubble. Opening the row is already the gesture
+        // that yields every other field, so it yields this one too — which is
+        // what makes the page readable on a touch screen.
+        if (b.description) bits.unshift(field('Description', b.description));
+
         const cell = el('td', { attrs: { colspan: String(cols) } }, [
-            bits.length
-                ? el('div', { className: 'badge-detail' }, bits)
-                : el('div', { className: 'badge-detail' }, [
-                    el('p', { className: 'muted small', text: covered
-                        ? 'Nothing beyond the columns above — no room, tips or '
-                          + 'notes recorded for this badge.'
-                        : 'The community documents have no detail for this badge yet.' }),
-                ]),
+            el('div', { className: 'badge-detail' }, bits),
         ]);
         return el('tr', { className: 'detail-row' }, [cell]);
     }

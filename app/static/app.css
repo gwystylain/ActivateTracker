@@ -179,6 +179,15 @@ td.optimal .flag { margin-left: 1px; }
 /* Cursor only where the name is its own control — inside a level-table game
    row the click still expands the row, so it keeps that row's pointer. */
 .mode-name[tabindex] { cursor: help; }
+/* ...and the underline only where the promise can be kept. A pointer that
+   cannot hover has no gesture for the bubble but the long press, which is the
+   text-selection gesture too. Where the name is its own control a tap focuses
+   it and the bubble still opens, so that one keeps its underline; where the
+   name sits in a row that expands, the description is in the panel and the
+   row's own ▸ is the affordance. */
+@media (hover: none) {
+    .mode-name:not([tabindex]) { text-decoration: none; }
+}
 .mode-name:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
 
 .mode-tip {
