@@ -394,6 +394,20 @@ the page says "no scoring room for it at your tracked locations" rather than "yo
 get this", never makes the negative claim about a badge somebody has already earned, and
 never hides one behind the checkbox on that basis.
 
+### The page never scrolls sideways; .table-wrap does
+Wide content is reached by scrolling the table, never the document, so `html` carries
+`overflow-x: clip` (with `hidden` as the fallback for browsers without `clip`; `clip`
+avoids making the root a scroll container). Without it a single element wider than the
+viewport lets the whole page pan, and because block backgrounds only paint to the
+viewport width the card ends up adrift in a strip of bare background — the `.topbar`
+was doing exactly that below ~310px, where the brand and nav together no longer fit,
+hence its `flex-wrap: wrap`. The clip is a backstop, not a licence to overflow: an
+element that needs more width belongs in a `.table-wrap`, or it will simply be cut off.
+
+`.table-wrap` also sets `overscroll-behavior-x: contain`, so a horizontal swipe that
+has run out of table stops there instead of chaining into the page or into Chrome for
+Android's back-navigation gesture. `.mode-tip` sets the same for its vertical scroll.
+
 ### roomScores is per-location and sparse
 `roomScores` is the best score anyone *at that location* has posted, not a global best: coquitlam
 and langley disagree on every shared Hoops entry. It is also sparse — langley returns 38 rows
