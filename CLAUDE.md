@@ -108,7 +108,10 @@ for the room page's `roomInfo` / `roomGames` / `roomScores`, generalised to `[..
 site's hydration shape changes, these fixtures and the anchor regex are the canary.
 
 `tests/fixtures/badges_gmebagholder.json` is a live capture of the badge API's 118-row
-response. The langley HTML capture is old enough to predate `trophyProgress` while the
+response. It predates both the move to activate-scores.ca and the retirement of three
+badges, and is deliberately *not* re-captured: it is the pair to the same-era HTML fixtures,
+which is what lets `test_trophy_progress_recovers_the_same_count_the_badge_api_reports`
+check one source against the other. Refresh it only together with those. The langley HTML capture is old enough to predate `trophyProgress` while the
 coquitlam one has it — that pair differs in *both* capture date and page type, so it
 cannot settle where the field lives. A live poll settled it: both a location page and a
 room page return it, so it rides every poll. Anything relying on that should still tolerate
@@ -268,10 +271,20 @@ threshold above `possible`: a 40-badge location can never reach silver's 50, so 
 field entirely and parses to `(None, None)` — readers must tolerate that, and None is the
 absence of a claim, not zero.
 
-**Which badges** comes from `api.ryflix.ca/api/badges/activate-sync/<handle>`, a
+**Which badges** comes from `www.activate-scores.ca/api/activate/badges/<handle>`, a
 community-run proxy in front of an official Activate badge API (a bad handle returns
-`{"error": "Activate API returned 500"}`, naming its upstream). Public, unauthenticated,
-keyed on the handle alone. It returns every badge applicable to the player — earned or
+HTTP 500 with `{"message": "(Activate API) Internal server error"}`, naming its upstream).
+Public, unauthenticated, keyed on the handle alone. It moved here from
+`api.ryflix.ca/api/badges/activate-sync/<handle>`, which now answers 503 — the response
+shape is byte-identical, so only the URL and the origin check below changed.
+
+**It 403s a request with no `Origin`.** `{"message": "Forbidden: invalid origin"}`, returned
+to plain curl *and* to curl_cffi under `IMPERSONATE` — this is a server-side header check,
+not a TLS fingerprint, so it is not the Cloudflare problem in different clothes and
+impersonation does not address it. Either an `Origin` or a `Referer` naming the site
+satisfies it; `scraper._origin_headers` derives the former from `badges.api_base` rather
+than taking it as separate config, so a repointed base cannot leave behind a stale origin
+that 403s every request. It returns every badge applicable to the player — earned or
 not, with name, description, star value and **partial progress** — so there is no separate
 catalog fetch and `badges` is a mirror of upstream, refreshed on every poll.
 
@@ -282,13 +295,15 @@ fails the score poll, the same treatment the catalog gets. If the proxy disappea
 dashboard's count survives on `trophyProgress` and only the per-badge detail goes stale.
 
 ### The badge proxy rate-limits, and the losers used to be the same every night
-Being one person's server, it is far stricter than playactivate.com, which serves 28 score
-pages back to back without complaint. Observed live: five handles landed, the sixth and
-everything after came back `HTTP 429` in ~6ms — answered by a limiter, not by the upstream —
-and it was still refusing 16 seconds after the first request, so the window is minutes, not
-seconds. So the badge leg has its own `badges.spacing_seconds` (~15s) instead of sharing
-`poll.jitter_seconds` (0.5–2.0s), which puts a dozen handles inside 5/minute and the whole
-leg under three minutes.
+The predecessor at api.ryflix.ca was far stricter than playactivate.com, which serves 28
+score pages back to back without complaint: five handles landed, the sixth and everything
+after came back `HTTP 429` in ~6ms — answered by a limiter, not by the upstream — and it was
+still refusing 16 seconds after the first request. The current host is two orders of
+magnitude roomier and says so, returning `X-RateLimit-Limit: 120` with `Remaining` and a
+`Reset` that sat ~30s out when measured, so `badges.spacing_seconds` is down to a courteous
+1–3s. The leg keeps its own spacing rather than sharing `poll.jitter_seconds` because it is
+the one that leaves playactivate.com, and the machinery below stays for the same reason —
+the limit is somebody else's to change.
 
 `scraper.RateLimited` exists to keep that apart from an ordinary `FetchError`: a 429 says
 nothing about the request and the same handle works later, where a 404 or 500 means stop
@@ -311,11 +326,23 @@ player would clear every badge only the other profile holds. If any of a player'
 failed, the write is skipped entirely (`badges_skipped`) and last poll's rows stand — older
 but true, and `/badges` states the date it is showing.
 
+**Upstream retires badges, so `poller._retire_badges` deletes.** Go For Gold, Recollection
+and Sniper Shot 1.0 went in the move, taking the catalog from 118 to 115. Upserting alone
+would have left every existing player counted out of 118 while a newly added one was counted
+out of 115 — a denominator that depends on when you joined — since `/badges` reads `possible`
+as that player's row count. A player's rows are pruned to the ids their own payload carried,
+then a `badges` row is dropped once no player is left holding it: the foreign key makes that
+order mandatory, and it is what lets a player whose poll was skipped keep their row until
+theirs lands. This leans entirely on the partial-answer rule above — a list short by a failed
+handle would otherwise read as "upstream dropped these". `badge_reference.py` still carries
+entries for all three; a lookup that never happens costs nothing, so they stay until the
+generator is next run.
+
 Four traps, all of them load-bearing:
 
-- **`badge_id` is the key, never `name`.** The API returns 118 badges under 117 names:
-  `Untouchable 5.0` is id 111 (Piperooni) *and* id 125 (Wormholes). The community master
-  document has the same collision.
+- **`badge_id` is the key, never `name`.** The API returns 115 badges under 114 names
+  (118/117 before three were retired): `Untouchable 5.0` is id 111 (Piperooni) *and*
+  id 125 (Wormholes). The community master document has the same collision.
 - **The community badge trackers use their own id space.** Joining the sync response to
   the ryflix page's embedded `BADGES` array by id mismatches 108 of 118 rows, which is why
   their own page matches by normalised name. Nothing of theirs may be joined by id.

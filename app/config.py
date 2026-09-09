@@ -69,22 +69,24 @@ class BadgeConfig(BaseModel):
     """
 
     enabled: bool = True
-    api_base: str = "https://api.ryflix.ca/api/badges"
+    api_base: str = "https://www.activate-scores.ca/api/activate/badges"
 
-    # This leg gets its own spacing rather than sharing `poll.jitter_seconds`
-    # (0.5-2.0s), which is tuned for a Cloudflare-fronted site that served 28
-    # score pages back to back without complaint. The badge proxy is somebody's
-    # personal server and rate-limits far harder: observed live, five handles
-    # landed and every one after was refused with an instant 429, still refusing
-    # 16 seconds after the first request. ~15s apart keeps a dozen handles
-    # inside 5/minute and puts the whole leg under three minutes, which a daily
-    # poll doesn't notice.
-    spacing_seconds: tuple[float, float] = (12.0, 18.0)
+    # Still its own spacing rather than sharing `poll.jitter_seconds`, because
+    # this is the one leg that leaves playactivate.com and the host that serves
+    # it publishes a limit. The predecessor at api.ryflix.ca let five handles
+    # through a minute and refused the rest with an instant 429; this one states
+    # `X-RateLimit-Limit: 120` over a window whose reset sat ~30s out when
+    # measured, which is two orders of magnitude more room. A couple of seconds
+    # apart clears a dozen handles in well under a minute and stays polite on
+    # somebody else's server.
+    spacing_seconds: tuple[float, float] = (1.0, 3.0)
 
     # A 429 is waited out rather than lost. Without this the handles that lose
     # are the ones at the back of a stable queue, every night, which is how a
     # player's badge row goes ten days stale while the dashboard shows a count
-    # that was true when it was written.
+    # that was true when it was written. The current host looks like
+    # `express-rate-limit`, which sends a real `Retry-After` on a 429, so the
+    # backoff below should now be the fallback rather than the usual path.
     max_retries: int = 3
     backoff_seconds: float = 30.0
     # But never wait longer than this in one go, whatever `Retry-After` asks

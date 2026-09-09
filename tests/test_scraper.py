@@ -380,9 +380,11 @@ class _OneShotSession:
     def __init__(self, resp):
         self._resp = resp
         self.urls = []
+        self.kwargs = []
 
     async def get(self, url, **kw):
         self.urls.append(url)
+        self.kwargs.append(kw)
         return self._resp
 
 
@@ -435,3 +437,47 @@ def test_an_unreadable_retry_after_is_no_answer_rather_than_a_made_up_one():
     assert retry_after_seconds("") is None
     assert retry_after_seconds("soon") is None
 
+
+
+# ---------- the badge endpoint's shape ----------
+
+async def test_the_badge_url_is_the_base_and_the_handle():
+    """It moved from api.ryflix.ca/api/badges/activate-sync/<handle> to
+    activate-scores.ca/api/activate/badges/<handle> - one path segment shorter,
+    and the old host now answers 503."""
+    session = _OneShotSession(_Resp(200, payload=[]))
+    await fetch_badges("gmebagholder", session=session, timeout=1.0)
+
+    assert session.urls == [
+        "https://www.activate-scores.ca/api/activate/badges/gmebagholder"
+    ]
+    # Without this the API answers 403 {"message": "Forbidden: invalid origin"}
+    # however good the TLS fingerprint is - it is a header check, not curl_cffi's
+    # department.
+    assert session.kwargs[0]["headers"] == {
+        "Origin": "https://www.activate-scores.ca"
+    }
+
+
+async def test_the_origin_follows_a_repointed_base():
+    """Derived, never configured separately: a stale origin left behind by a
+    repointed base would 403 every request."""
+    session = _OneShotSession(_Resp(200, payload=[]))
+    await fetch_badges(
+        "gmebagholder", session=session, base="https://mirror.example/api/b", timeout=1.0
+    )
+
+    assert session.urls == ["https://mirror.example/api/b/gmebagholder"]
+    assert session.kwargs[0]["headers"] == {"Origin": "https://mirror.example"}
+
+
+async def test_a_handle_the_api_rejects_is_a_fetch_error_not_an_empty_badge_set():
+    """A bad handle now comes back as HTTP 500 with {"message": ...} rather than
+    a 200 carrying {"error": ...}. Either way it must not read as "no badges"."""
+    session = _OneShotSession(_Resp(500, payload={"message": "(Activate API) Internal server error"}))
+
+    with pytest.raises(FetchError):
+        await fetch_badges("nosuchhandle", session=session, timeout=1.0)
+
+    with pytest.raises(FetchError):
+        parse_badges({"message": "(Activate API) Internal server error"})

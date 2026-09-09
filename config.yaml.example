@@ -33,13 +33,17 @@ badges:
   # elsewhere if it moves, or set enabled: false to skip badges entirely (the
   # dashboard's badge count then falls back to the score page's own tally).
   enabled: true
-  api_base: "https://api.ryflix.ca/api/badges"
-  # Being somebody's personal server, it rate-limits far harder than
-  # playactivate.com does: five handles land and the rest come straight back as
-  # 429 until the window rolls. So this leg gets its own spacing rather than
-  # sharing poll.jitter_seconds, and a 429 is waited out rather than dropped —
-  # otherwise the handles at the back of the queue lose every single night.
-  spacing_seconds: [12.0, 18.0]  # min/max delay between badge requests
+  # Moved here from api.ryflix.ca, which now answers 503. Same response shape;
+  # the path is {api_base}/{handle}, and the request carries an Origin derived
+  # from this URL because the host 403s without one.
+  api_base: "https://www.activate-scores.ca/api/activate/badges"
+  # Still its own spacing rather than sharing poll.jitter_seconds, since this is
+  # the one leg that leaves playactivate.com. The old host allowed five handles
+  # a minute; this one states X-RateLimit-Limit: 120 over a ~30s window, so a
+  # couple of seconds apart is both quick and polite. A 429 is still waited out
+  # rather than dropped — otherwise the handles at the back of the queue lose
+  # every single night.
+  spacing_seconds: [1.0, 3.0]    # min/max delay between badge requests
   max_retries: 3                 # retries after a 429 (other errors: none)
   backoff_seconds: 30.0          # first wait, doubling; a Retry-After wins
   max_wait_seconds: 120.0        # longer than this, give up: a poll holds a lock

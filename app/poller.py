@@ -168,6 +168,7 @@ async def poll_all(
             "badges_newly_earned": 0,
             "badges_errors": 0,
             "badges_skipped": 0,
+            "badges_retired": 0,
         }
         if not rows:
             return counters
@@ -297,6 +298,7 @@ async def poll_all(
                         continue
                     counters["badges_fetched"] += 1
                     counters["badges_newly_earned"] += got["newly_earned"]
+                    counters["badges_retired"] += got["retired"]
 
             for location_id, loc in seen_locations.items():
                 if not loc["rooms"]:
@@ -494,7 +496,48 @@ def persist_badges(
                 ),
             )
 
-    return {"badges": len(states), "newly_earned": newly_earned}
+        retired = _retire_badges(conn, player_id, prior, states)
+
+    return {"badges": len(states), "newly_earned": newly_earned, "retired": retired}
+
+
+def _retire_badges(
+    conn: sqlite3.Connection,
+    player_id: int,
+    prior: dict[int, sqlite3.Row],
+    states: list[scraper.BadgeState],
+) -> int:
+    """Drop rows for badges the API no longer lists. Returns how many.
+
+    `badges` is a mirror of upstream, and upstream does retire badges — three
+    went in the move to activate-scores.ca (Go For Gold, Recollection, Sniper
+    Shot 1.0). Upserting alone would leave every existing player counted out of
+    the old 118 while a newly added one was counted out of 115, which is a
+    denominator that depends on when you joined.
+
+    Safe only because the caller has already established the payload is whole:
+    `poll_all` skips the write entirely unless every one of a player's handles
+    answered, so a list short by a failed handle never reaches here and cannot
+    delete a badge the other profile still holds.
+    """
+    stale = sorted(set(prior) - {s.badge_id for s in states})
+    if not stale:
+        return 0
+
+    conn.executemany(
+        "DELETE FROM player_badges WHERE player_id = ? AND badge_id = ?",
+        [(player_id, b) for b in stale],
+    )
+    # Then the catalog row, but only once no player is left holding it — the
+    # foreign key makes that order mandatory rather than merely tidy, and a
+    # player whose own poll was skipped keeps their row until theirs lands.
+    conn.executemany(
+        "DELETE FROM badges WHERE badge_id = ?"
+        "   AND NOT EXISTS (SELECT 1 FROM player_badges WHERE badge_id = ?)",
+        [(b, b) for b in stale],
+    )
+    log.info("retired %d badge(s) for player=%s: %s", len(stale), player_id, stale)
+    return len(stale)
 
 
 def player_locations_for_admin(conn: sqlite3.Connection) -> Iterable[sqlite3.Row]:

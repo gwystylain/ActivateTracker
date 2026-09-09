@@ -340,7 +340,7 @@ def test_a_first_poll_records_badges_without_inventing_a_date(tmp_path):
         now=datetime(2026, 8, 11, 11, 0, tzinfo=timezone.utc),
     )
 
-    assert got == {"badges": 3, "newly_earned": 0}
+    assert got == {"badges": 3, "newly_earned": 0, "retired": 0}
     rows = conn.execute(
         "SELECT badge_id, earned, earned_on FROM player_badges ORDER BY badge_id"
     ).fetchall()
@@ -712,3 +712,84 @@ def test_the_stalest_player_goes_first_so_the_same_ones_cannot_starve(tmp_path):
 
     seen = {fresh: ["fresh"], stale: ["stale"], never: ["never"]}
     assert [pid for pid, _ in poller_mod.badge_order(conn, seen)] == [never, stale, fresh]
+
+
+# ---------- badges: retiring what upstream dropped ----------
+
+def test_a_badge_upstream_no_longer_lists_is_dropped_not_left_behind(tmp_path):
+    """Three badges went in the move to activate-scores.ca. Upserting alone
+    would count an existing player out of the old 118 while a newly added one
+    was counted out of 115 - a denominator that depends on when you joined."""
+    conn = _conn(tmp_path)
+    pid = _insert_player(conn)
+    poller_mod.persist_badges(conn, pid, _states((1, True), (50, True), (2, False)))
+
+    got = poller_mod.persist_badges(conn, pid, _states((1, True), (2, False)))
+
+    assert got["retired"] == 1
+    held = [r[0] for r in conn.execute(
+        "SELECT badge_id FROM player_badges WHERE player_id = ? ORDER BY badge_id", (pid,)
+    )]
+    assert held == [1, 2]
+    # The catalog mirrors upstream, so the row goes too.
+    assert [r[0] for r in conn.execute("SELECT badge_id FROM badges ORDER BY badge_id")] == [1, 2]
+
+
+def test_a_retired_badge_survives_while_another_player_still_holds_it(tmp_path):
+    """The foreign key makes the order mandatory rather than tidy: a player
+    whose own poll was skipped keeps their row until theirs lands."""
+    conn = _conn(tmp_path)
+    one = _insert_player(conn)
+    two = conn.execute("INSERT INTO players (handle) VALUES ('kavo')").lastrowid
+    for pid in (one, two):
+        poller_mod.persist_badges(conn, pid, _states((1, True), (50, True)))
+
+    poller_mod.persist_badges(conn, one, _states((1, True)))
+
+    # Gone for the player who was polled, still there for the one who wasn't.
+    assert conn.execute(
+        "SELECT COUNT(*) FROM player_badges WHERE badge_id = 50"
+    ).fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM badges WHERE badge_id = 50"
+    ).fetchone()[0] == 1
+
+    poller_mod.persist_badges(conn, two, _states((1, True)))
+    assert conn.execute("SELECT COUNT(*) FROM badges WHERE badge_id = 50").fetchone()[0] == 0
+
+
+async def test_a_skipped_write_retires_nothing(tmp_path, monkeypatch):
+    """A list short by a failed handle must not read as "upstream dropped these"
+    - that would delete badges the other profile still holds."""
+    conn = _conn(tmp_path)
+    pid = conn.execute(
+        "INSERT INTO players (handle) VALUES (?)", ("gmebagholder, kavo",)
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO player_locations (player_id, location_id, slug)"
+        " VALUES (?, 72, 'langley')",
+        (pid,),
+    )
+    poller_mod.persist_badges(conn, pid, _states((1, True), (50, True)))
+
+    _wire_poll(monkeypatch, {"gmebagholder": 100, "kavo": 200})
+    _no_sleep(monkeypatch)
+
+    async def fake_badges(handle, *, session, base, timeout):
+        if handle == "kavo":
+            raise RateLimited("HTTP 429", retry_after=None)
+        return _states((1, True))          # short by kavo's badge 50
+
+    monkeypatch.setattr(poller_mod.scraper, "fetch_badges", fake_badges)
+
+    counters = await poller_mod.poll_all(
+        conn,
+        PollConfig(jitter_seconds=(0.0, 0.0)),
+        badge_cfg=_badge_cfg(max_retries=0),
+    )
+
+    assert counters["badges_retired"] == 0
+    assert counters["badges_skipped"] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM player_badges WHERE badge_id = 50"
+    ).fetchone()[0] == 1

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from curl_cffi.requests import AsyncSession
 
@@ -26,11 +26,15 @@ ROOM_URL = (
 
 # Badges live nowhere on the score pages above — the site shows them only on the
 # in-store score-checker iPad. This is a community-run proxy in front of an
-# official Activate badge API (a bad handle comes back as
-# {"error": "Activate API returned 500"}), public and unauthenticated, keyed on
-# the handle alone. Overridable via config so pointing at the upstream directly,
-# if its URL ever becomes known, is a config edit rather than a code change.
-BADGE_API_BASE = "https://api.ryflix.ca/api/badges"
+# official Activate badge API (a bad handle comes back as HTTP 500 with
+# {"message": "(Activate API) Internal server error"}, naming its upstream),
+# public and unauthenticated, keyed on the handle alone. Overridable via config
+# so pointing at the upstream directly, if its URL ever becomes known, is a
+# config edit rather than a code change.
+#
+# It moved here from api.ryflix.ca, which now answers 503. The response shape is
+# unchanged, so only the URL and the origin check below differ.
+BADGE_API_BASE = "https://www.activate-scores.ca/api/activate/badges"
 
 # Chrome TLS-fingerprint profile passed to curl_cffi. Required because
 # playactivate.com (Cloudflare) rejects non-browser TLS handshakes with 403.
@@ -300,8 +304,14 @@ def parse_badges(payload: Any) -> list[BadgeState]:
     Split from `fetch_badges` so it can be exercised against a saved payload
     with no network, the way `parse_html` is.
     """
-    if isinstance(payload, dict) and payload.get("error"):
-        raise FetchError(f"badge API error: {payload['error']}")
+    if isinstance(payload, dict) and (payload.get("error") or payload.get("message")):
+        # Both spellings: the old host said {"error": ...} with a 200, the
+        # current one says {"message": ...} with a 500 that `fetch_badges`
+        # already turns away. Kept for the day one of them answers 200 with an
+        # error object — an empty result must never read as "no badges".
+        raise FetchError(
+            f"badge API error: {payload.get('error') or payload.get('message')}"
+        )
     if not isinstance(payload, list):
         raise ScrapeError(f"badge payload is {type(payload).__name__}, expected a list")
 
@@ -326,6 +336,20 @@ def parse_badges(payload: Any) -> list[BadgeState]:
     return [states[k] for k in sorted(states)]
 
 
+def _origin_headers(base: str) -> dict[str, str]:
+    """`Origin` for the badge host, derived from whatever base it was given.
+
+    The API answers an otherwise identical request with
+    403 {"message": "Forbidden: invalid origin"} unless it carries an Origin (or
+    Referer) naming its own site — a server-side header check, not a TLS
+    fingerprint, so `IMPERSONATE` alone does not satisfy it. Derived rather than
+    configured so that repointing `badges.api_base` cannot leave a stale origin
+    behind that 403s every request.
+    """
+    parts = urlsplit(base)
+    return {"Origin": f"{parts.scheme}://{parts.netloc}"} if parts.netloc else {}
+
+
 async def fetch_badges(
     handle: str,
     *,
@@ -338,9 +362,11 @@ async def fetch_badges(
     Per player, not per location: the endpoint takes only a handle, and badges
     transfer between Activate locations where scores and rank do not.
     """
-    url = f"{base.rstrip('/')}/activate-sync/{quote(handle, safe='')}"
+    url = f"{base.rstrip('/')}/{quote(handle, safe='')}"
     log.info("fetch badges url=%s", url)
-    resp = await session.get(url, impersonate=IMPERSONATE, timeout=timeout)
+    resp = await session.get(
+        url, headers=_origin_headers(base), impersonate=IMPERSONATE, timeout=timeout
+    )
     if resp.status_code == 429:
         # Distinct from the catch-all below because it is not a verdict on the
         # handle: the proxy answers this one in milliseconds without touching
