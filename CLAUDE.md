@@ -222,10 +222,11 @@ conversely a gamemode it hasn't caught up with gets nulls and simply renders wit
 a dash for its player count. Both directions are expected and neither is an error.
 
 `optimal_players` is the document's "Optimal # of players" column, and it is **not populated for
-all 76** — 12 cells are blank and Grip's Firewall holds a `?`, so 13 come through as None and the
-page shows a dash. The document's `**` marker ("no clear consensus") survives as
-`optimal_disputed`, rendered as a starred, muted number: still shown, because a soft answer beats
-none, but visibly softer than the other 53. The filter treats a disputed 5 as a 5 — it is the same
+all 76** — 5 cells are blank, Grip's Firewall holds a `?`, and Laser Maze and Photon Rush have no
+row at all since the October 2026 edition moved them to its "Removed Games" section, so 8 come
+through as None and the page shows a dash. The document's `**` marker ("no clear consensus")
+survives as `optimal_disputed`, rendered as a starred, muted number: still shown, because a soft
+answer beats none, but visibly softer than the other 58. The filter treats a disputed 5 as a 5 — it is the same
 answer, just less settled.
 
 `public._described` hangs the data on each game in `/api/game-data` rather than storing it with the
@@ -327,7 +328,8 @@ failed, the write is skipped entirely (`badges_skipped`) and last poll's rows st
 but true, and `/badges` states the date it is showing.
 
 **Upstream retires badges, so `poller._retire_badges` deletes.** Go For Gold, Recollection
-and Sniper Shot 1.0 went in the move, taking the catalog from 118 to 115. Upserting alone
+and Sniper Shot 1.0 went in the move, taking the catalog from 118 to 115, and Mascot followed
+in October 2026 (114). Upserting alone
 would have left every existing player counted out of 118 while a newly added one was counted
 out of 115 — a denominator that depends on when you joined — since `/badges` reads `possible`
 as that player's row count. A player's rows are pruned to the ids their own payload carried,
@@ -335,13 +337,13 @@ then a `badges` row is dropped once no player is left holding it: the foreign ke
 order mandatory, and it is what lets a player whose poll was skipped keep their row until
 theirs lands. This leans entirely on the partial-answer rule above — a list short by a failed
 handle would otherwise read as "upstream dropped these". `badge_reference.py` still carries
-entries for all three; a lookup that never happens costs nothing, so they stay until the
-generator is next run.
+entries for the first three, because the document still describes them; a lookup that never
+happens costs nothing.
 
 Four traps, all of them load-bearing:
 
-- **`badge_id` is the key, never `name`.** The API returns 115 badges under 114 names
-  (118/117 before three were retired): `Untouchable 5.0` is id 111 (Piperooni) *and*
+- **`badge_id` is the key, never `name`.** The API returns 114 badges under 113 names
+  (118/117 before four were retired): `Untouchable 5.0` is id 111 (Piperooni) *and*
   id 125 (Wormholes). The community master document has the same collision.
 - **The community badge trackers use their own id space.** Joining the sync response to
   the ryflix page's embedded `BADGES` array by id mismatches 108 of 118 rows, which is why
@@ -386,27 +388,46 @@ locations means one is Langley-only and the other Coquitlam-only. `lookup` falls
 a name-only index merged one field at a time, so a field the two disagree about is
 dropped rather than answered with the other badge's value. Normalising is not optional:
 13 names differ in case or spacing between sources (`Activ8`/`ACTIV8`,
-`10 for 10`/`10 For 10`), and 117 of 118 live badges only match once normalised.
-`Mascot` matches nothing and renders with no detail — expected, not an error.
+`10 for 10`/`10 For 10`), and 117 of 118 live badges only match once normalised. Activate
+also rewords descriptions now and then — 8 of the 114 live ones no longer match the
+document's (Riddle 2.0 says "coins" where the document still says "stars") — and those
+resolve through the name-only index, which is only safe because their names are unique. If
+either `Untouchable 5.0` is ever reworded, it loses its room rather than taking the other's.
 
 Where the sources disagree about a room the document wins: it was right about both
 `Untouchable 5.0` rooms (checked against `location_games`, which the other source got
-wrong for both) and it is more complete about rooms running the same game
-(`Mega Laser or Trench` vs just Mega Laser). Two conflicts stay unresolved because
-neither game runs at a tracked location — Steady Stream's Photon Rush and Recollection's
-Memory — and the document is taken on both.
+wrong for both). Recollection's Memory is the conflict that check can't settle — it runs
+at no tracked location — and the document is taken.
 
-Two badges are graded by neither source — `Photobomb` and `Mascot`, both of which the
-ryflix catalog omits — so their `difficulty` is this repo's estimate, declared by
-`difficulty_estimated` with the reasoning in `difficulty_note`. Both are graded Easy:
-neither asks for any play skill, and of the 20 graded 5-star badges 18 are Easy and none
-is Hard or above. `gen_badge_reference.ESTIMATES` only ever *fills a hole* — an estimate
-that finds a sourced grade already there is dropped with a warning to stderr, so a
-document catching up retires it rather than being argued with. The page shows an
-estimated grade muted and starred, the same treatment `/games` gives a player count the
-document records without consensus: a soft answer beats a hole in the column, but it must
-not read as something a document said. The filter and the sort treat an estimated Easy as
-an Easy — same answer, less settled.
+**A badge only ryflix lists is still built**, from ryflix alone. That is Steady Stream:
+Activate still serves it, but the October 2026 document moved it from its badge list to
+its notes on retired mechanics, and dropping it would have cost it its grade and room.
+Its room is the one rooms-from-ryflix-only case the generator second-guesses: when the
+claimed room runs none of what the badge names and the master document places that
+gamemode in exactly one room, that room is taken, with a note to stderr. Ryflix says Push;
+Photon Rush is a Laser game. Rooms from the document are never second-guessed.
+
+**`games` is the (room, gamemode) pairs a badge names**, matched against
+`master_document.GAMEMODES` across the name, description and `Game/Level` — name-matching
+rather than sentence-parsing because the sentences vary ("Complete Bop level 7", "Win level
+1 of Mega Grid", "Easter Egg Statues", "Scramble 1") and the names don't. Longest name
+first and a matched span is spent, so The Marathon's "Mega Relay" can't also count as
+Hide's "Relay". `GAMEMODES` holds only co-op gamemodes, so a badge played in a competitive
+one (Snake Island's Tails) names nothing and is placed by its room alone. Because the
+generator imports `master_document`, rerun it after editing that file too.
+`master_document` keeps Laser Maze and Photon Rush, which the October 2026 document moved
+to "Removed Games", precisely so Steady Stream can still be placed.
+
+`gen_badge_reference.ESTIMATES` can carry this repo's own `difficulty` for a badge neither
+source grades, declared by `difficulty_estimated` with the reasoning in
+`difficulty_note`. It is empty today: its two estimates retired themselves the two ways an
+estimate should go — ryflix graded Photobomb (Easy, as estimated), and Mascot left the
+API. An estimate only ever *fills a hole* — one that finds a sourced grade already there is
+dropped with a warning to stderr, so a document catching up retires it rather than being
+argued with. The page shows an estimated grade muted and starred, the same treatment
+`/games` gives a player count the document records without consensus: a soft answer beats
+a hole in the column, but it must not read as something a document said. The filter and
+the sort treat an estimated Easy as an Easy — same answer, less settled.
 
 `hint` and `giveaway` are the Easter Egg and Riddle answers. The source document hides
 them as white-on-white text because each can only be solved once; this page shows them
@@ -414,14 +435,40 @@ outright alongside the other detail, so expanding a badge is enough to spend tha
 is a deliberate call — the page exists to surface everything known about a badge — but
 it is the reason the detail is behind a click at all rather than sitting in the grid.
 
-**The "Where" line is a weak negative and must stay worded as one.** It joins a badge's
-rooms against `location_games.room_name`, which is only each location's *scoring* rooms:
-the photo room is in no location's list, so `Photobomb` looks unobtainable everywhere.
-Badges also transfer between locations, so `Row By Row` (Climb, at neither tracked
-location) is earned all the same. Both cases are live in the current data, which is why
-the page says "no scoring room for it at your tracked locations" rather than "you can't
-get this", never makes the negative claim about a badge somebody has already earned, and
-never hides one behind the checkbox on that basis.
+### /badges by location: the gamemode, not just the room
+`app/badge_locations.py` answers, per badge and per tracked location, whether it can be
+done there (`where`) and any location-specific facts (`here`); `/api/badge-data` sends both
+for every location up front, so the Location filter never refetches. Pure functions over
+`location_games` rows, so the rules are tested without a database.
+
+**Availability checks the gamemode as well as the room.** Rooms swap what they run:
+Langley has a Laser room, but it runs Sneak and Chopper, and Steady Stream wants Photon
+Rush. So a room counts only if it runs every gamemode the badge's `games` names there.
+
+**Three answers, because the negative is weak in one specific way.** `location_games` holds
+only *scoring* rooms, so the photo room is in no location's list whether or not the
+building has one. A room the master document doesn't know and the location doesn't list
+is therefore `unknown`, never `no`; only a known scoring room that is missing, or one
+running something else, is a `no`. A badge with no room gets no answer — anywhere will do.
+A location with no catalog is left out entirely rather than answering "no" to everything.
+
+The Location select has two kinds of option and they differ on purpose. A specific
+location hides only a definite `no` — the question is what can be done in that building,
+and a badge earned elsewhere can't be done there. **Any of my locations** (shown only with
+more than one tracked location; it replaced a checkbox, and a saved tick migrates to it)
+is the weaker claim, so it keeps the older rule: a badge somebody already holds is never
+hidden, because badges transfer between locations — `Row By Row` (Climb, at neither tracked
+location) is earned all the same, which is also why the **Where** line words that case as
+"earned already, so somewhere else" rather than "you can't get this". Choosing a location
+narrows the Room filter to rooms doable there and limits the detail panel's facts to it.
+
+**Facts** are keyed by badge name in `badge_locations._RULES`: Riddle 7.0's co-op S games
+with a level 7, Activated's and Halfway Mark's level counts (half rounds up, so an odd
+count never reads as done a level early), The Grand Tour's rooms in the site's order, and
+Completionist's co-op game count — a floor only, since competitive games count towards it
+and the site never lists them. Per-player lines come from the newest snapshot at that
+location, intersected with the catalog so a count can't exceed its total, and the page
+skips them for a player who already holds the badge.
 
 ### The description bubble is a pointer's shortcut, never the only way in
 A long press is the only gesture a touch screen has for the hover bubble, and it is the

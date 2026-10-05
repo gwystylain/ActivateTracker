@@ -16,43 +16,33 @@ Inputs:
   difficulty rating, an optimal player count, overlapping badges and notes.
 
 Where the two disagree about a room the document wins; see badge_reference's
-module docstring for why, and for the two conflicts that resolves.
+module docstring for why, and for the conflicts that resolves.
+
+Each badge's gamemodes are matched against app/master_document.py, so rerun
+this after editing that too.
 """
 from __future__ import annotations
 
 import json
 import re
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
+
+from app.master_document import GAMEMODES
 
 # Difficulty grades neither document records, filled in here so the column has
 # no holes. These are *estimates* and are marked as such all the way to the page
 # — they never overwrite a sourced grade, and the moment either document grades
-# one of these the estimate steps aside (asserted in build()).
+# one of these the estimate steps aside (asserted in build()). A badge neither
+# document has an entry for at all needs a "name" and "description" here too,
+# Activate's own wording, to key the record.
 #
-# Both are 5-star badges, and of the 20 graded 5-star badges 18 are Easy and
-# none is Hard or above. Neither asks for any play skill: the scale grades the
-# challenge, and comparable logistics badges — Early Bird, Up to Date — are Easy.
-ESTIMATES: dict[str, dict[str, Any]] = {
-    "photobomb": {
-        "difficulty": "Easy",
-        "why": "Estimated: no skill or failure condition, just visit the photo "
-               "room and take the photo.",
-    },
-    "mascot": {
-        # The community document has no entry at all for this one, so the name
-        # and description are Activate's own, carried here to key the record.
-        "name": "Mascot",
-        "description": (
-            "Come to Activate with your Activate water bottle and in your "
-            "Activate shirt and hat"
-        ),
-        "difficulty": "Easy",
-        "why": "Estimated: nothing to play. The barrier is owning the three "
-               "pieces of merch and remembering them, not doing anything hard.",
-    },
-}
+# Empty since October 2026, with both of its estimates retired the two ways an
+# estimate should go: ryflix graded Photobomb (Easy, as estimated), and Mascot
+# left the badge API — the document now files it with the retired badges.
+ESTIMATES: dict[str, dict[str, Any]] = {}
 
 _ENTRY = re.compile(r"^\* \*\*(.+?):\*\*\s*(.*?)\s*$")
 _FIELD = re.compile(r"^\s+\* ##\s*([A-Za-z/ ]+?):\s*(.*?)\s*$")
@@ -150,6 +140,96 @@ def parse_rooms(raw: Any) -> tuple[tuple[str, ...], str]:
     return (tuple(parts), "all" if len(parts) > 1 else "any")
 
 
+_WORD_EDGE = r"(?<![A-Za-z0-9])"
+_WORD_END = r"(?![A-Za-z0-9])"
+
+
+def find_games(text: str, rooms: Iterable[str]) -> tuple[tuple[str, str], ...]:
+    """(room, gamemode) pairs the badge's wording names, among `rooms`.
+
+    Matched against master_document.GAMEMODES rather than parsed out of the
+    sentence, because the sentences vary — "Complete Bop level 7", "Win level 1
+    of Mega Grid", "Easter Egg Statues", a `Game/Level` of "Scramble 1" — while
+    the names don't. Longest name first, and a matched span is spent, so The
+    Marathon's "Mega Relay" can't also count as Hide's "Relay"; the bare "Relay"
+    earlier in the sentence is the one that counts for Hide.
+
+    One name in two of the badge's rooms (Zap, back when Adrenaline Junkie said
+    "Mega Laser or Trench") yields a pair for each room.
+
+    Only cooperative gamemodes are listed there — the competitive ones have no
+    levels for the site to catalog — so a badge played in one (Snake Island's
+    Tails) names nothing and is placed by its room alone.
+    """
+    rooms = tuple(rooms)
+    names = sorted({g for r in rooms for g in GAMEMODES.get(r, {})}, key=len, reverse=True)
+    spent: list[tuple[int, int]] = []
+    hits: list[tuple[int, str]] = []
+    for name in names:
+        pattern = _WORD_EDGE + re.escape(name) + _WORD_END
+        for m in re.finditer(pattern, text, re.IGNORECASE):
+            if any(m.start() < end and start < m.end() for start, end in spent):
+                continue
+            spent.append(m.span())
+            hits.append((m.start(), name))
+            break
+    return tuple(
+        (room, name)
+        for _, name in sorted(hits)
+        for room in rooms
+        if name in GAMEMODES.get(room, {})
+    )
+
+
+def _place(
+    name: str, text: str, rooms: tuple[str, ...], mode: str, *, trusted: bool
+) -> tuple[tuple[str, ...], str, tuple[tuple[str, str], ...]]:
+    """(rooms, mode, games) for one badge.
+
+    `trusted` is whether the rooms came from the master document. Rooms only
+    ryflix gives are checked against what the wording names: if the claimed
+    room runs none of it, and the master document places it in exactly one
+    room, that room is taken instead. Steady Stream is the case — ryflix says
+    Push, the same mistake it makes for Recollection, but Photon Rush is a Laser
+    game.
+    """
+    games = find_games(text, rooms)
+    if games or trusted or not rooms:
+        return rooms, mode, games
+    elsewhere = find_games(text, GAMEMODES)
+    homes = tuple(dict.fromkeys(room for room, _ in elsewhere))
+    if len(homes) != 1:
+        return rooms, mode, games
+    print(
+        f"note: {name!r}: ryflix says {' / '.join(rooms)}, but "
+        f"{', '.join(g for _, g in elsewhere)} is a {homes[0]} gamemode; "
+        f"taking {homes[0]}.",
+        file=sys.stderr,
+    )
+    return homes, "any", elsewhere
+
+
+def _empty_record(name: str) -> dict[str, Any]:
+    return {
+        "name": name,
+        "rooms": (),
+        "rooms_mode": "any",
+        "games": (),
+        "level": None,
+        "difficulty": None,
+        "difficulty_estimated": False,
+        "difficulty_note": None,
+        "players": None,
+        "overlapping": None,
+        "notes": None,
+        "tips": (),
+        "watch_out": (),
+        "fun_facts": (),
+        "hint": None,
+        "giveaway": None,
+    }
+
+
 def build(doc_text: str, ryflix_html: str | None) -> dict[str, dict[str, Any]]:
     ryflix: dict[str, dict[str, Any]] = {}
     if ryflix_html:
@@ -159,22 +239,30 @@ def build(doc_text: str, ryflix_html: str | None) -> dict[str, dict[str, Any]]:
             ryflix.setdefault(norm(b.get("name")), b)
 
     out: dict[str, dict[str, Any]] = {}
+    documented: set[str] = set()
     for entry in parse_document(doc_text):
         fields = entry["fields"]
         extra = ryflix.get(norm(entry["name"]), {})
+        documented.add(norm(entry["name"]))
 
         rooms, mode = parse_rooms(fields.get("Room") or fields.get("Rooms"))
+        trusted = bool(rooms)
         if not rooms:
             rooms, mode = parse_rooms(extra.get("room"))
+        level = fields.get("Game/Level") or fields.get("Level")
+        rooms, mode, games = _place(
+            entry["name"],
+            " ".join((entry["name"], entry["description"], level or "")),
+            rooms, mode, trusted=trusted,
+        )
 
-        record: dict[str, Any] = {
-            "name": entry["name"],
+        record = _empty_record(entry["name"])
+        record.update({
             "rooms": rooms,
             "rooms_mode": mode,
-            "level": fields.get("Game/Level") or fields.get("Level"),
+            "games": games,
+            "level": level,
             "difficulty": extra.get("difficulty") or None,
-            "difficulty_estimated": False,
-            "difficulty_note": None,
             "players": extra.get("players") or None,
             "overlapping": extra.get("overlapping") or None,
             "notes": extra.get("notes") or None,
@@ -183,17 +271,46 @@ def build(doc_text: str, ryflix_html: str | None) -> dict[str, dict[str, Any]]:
             "fun_facts": tuple(fields.get("Fun Fact", ())),
             "hint": fields.get("Hint"),
             "giveaway": fields.get("Giveaway"),
-        }
-        for field in ("level", "difficulty", "players", "overlapping", "notes",
-                      "hint", "giveaway"):
-            record[field] = _plain(record[field]) or None
-        for field in ("tips", "watch_out", "fun_facts"):
-            record[field] = tuple(_plain(x) for x in record[field])
-
+        })
+        _flatten(record)
         out[key_for(entry["name"], entry["description"])] = record
+
+    # A badge ryflix lists and the document doesn't still deserves what ryflix
+    # knows. Steady Stream is one: Activate still serves it, but the October
+    # 2026 document moved it out of its badge list and into its notes on
+    # retired mechanics, so without this it would lose its grade and its room.
+    for name_key, extra in ryflix.items():
+        if name_key in documented or not extra.get("name"):
+            continue
+        rooms, mode = parse_rooms(extra.get("room"))
+        rooms, mode, games = _place(
+            extra["name"],
+            " ".join((extra["name"], extra.get("description") or "")),
+            rooms, mode, trusted=False,
+        )
+        record = _empty_record(extra["name"])
+        record.update({
+            "rooms": rooms,
+            "rooms_mode": mode,
+            "games": games,
+            "difficulty": extra.get("difficulty") or None,
+            "players": extra.get("players") or None,
+            "overlapping": extra.get("overlapping") or None,
+            "notes": extra.get("notes") or None,
+        })
+        _flatten(record)
+        out[key_for(extra["name"], extra.get("description") or "")] = record
 
     _apply_estimates(out)
     return out
+
+
+def _flatten(record: dict[str, Any]) -> None:
+    for field in ("level", "difficulty", "players", "overlapping", "notes",
+                  "hint", "giveaway"):
+        record[field] = _plain(record[field]) or None
+    for field in ("tips", "watch_out", "fun_facts"):
+        record[field] = tuple(_plain(x) for x in record[field])
 
 
 def _apply_estimates(records: dict[str, dict[str, Any]]) -> None:
@@ -208,26 +325,11 @@ def _apply_estimates(records: dict[str, dict[str, Any]]) -> None:
     for name_key, estimate in ESTIMATES.items():
         key = by_name.get(name_key)
         if key is None:
-            # Not in the document at all — Mascot. Build the record so the
-            # badge still resolves, with nothing claimed but the estimate.
+            # In neither source at all (Mascot was, until it was retired).
+            # Build the record so the badge still resolves, with nothing
+            # claimed but the estimate.
             key = key_for(name_key, estimate.get("description", ""))
-            records[key] = {
-                "name": estimate.get("name", name_key),
-                "rooms": (),
-                "rooms_mode": "any",
-                "level": None,
-                "difficulty": None,
-                "difficulty_estimated": False,
-                "difficulty_note": None,
-                "players": None,
-                "overlapping": None,
-                "notes": None,
-                "tips": (),
-                "watch_out": (),
-                "fun_facts": (),
-                "hint": None,
-                "giveaway": None,
-            }
+            records[key] = _empty_record(estimate.get("name", name_key))
 
         record = records[key]
         if record["difficulty"]:
@@ -250,9 +352,17 @@ def _lit(v: Any, indent: str) -> str:
     if isinstance(v, tuple):
         if not v:
             return "()"
-        inner = "".join(f"{indent}    {json.dumps(x, ensure_ascii=False)},\n" for x in v)
+        inner = "".join(f"{indent}    {_inline(x)},\n" for x in v)
         return "(\n" + inner + indent + ")"
     return json.dumps(v, ensure_ascii=False) if v is not None else "None"
+
+
+def _inline(v: Any) -> str:
+    # A nested tuple (a `games` pair) must stay a tuple: json.dumps would write
+    # a list, and a list can't go in the set _build_name_index compares with.
+    if isinstance(v, tuple):
+        return "(" + ", ".join(_inline(x) for x in v) + ("," if len(v) == 1 else "") + ")"
+    return json.dumps(v, ensure_ascii=False)
 
 
 def render(records: dict[str, dict[str, Any]]) -> str:
@@ -285,23 +395,33 @@ same reason, as `master_document.lookup`.
 
 Where the two sources disagree about a room, the master document wins. It was
 right about both Untouchable 5.0 rooms where the other source gave Portals for
-both, checked against the site's own catalog (`location_games`), and it is more
-complete about rooms that run the same game — "Mega Laser or Trench" where the
-other names only Mega Laser. Two conflicts are unresolved by that check because
-neither game runs at a location we track: the document puts Steady Stream's
-Photon Rush in Laser and Recollection's Memory in Arena, the other puts both in
-Push. The document's Arena/Memory agrees with `master_document.GAMEMODES`, so
-the document is taken on both.
+both, checked against the site's own catalog (`location_games`). Recollection is
+the conflict that check can't settle, since Memory runs at no location we track:
+the document puts it in Arena, the other in Push, and the document's Arena
+agrees with `master_document.GAMEMODES`.
+
+A badge only the other source lists keeps that source's room unless the room
+runs none of what the badge names, in which case the gamemode's own room is
+taken. That is Steady Stream since the October 2026 document moved it into its
+notes on retired mechanics: the other source says Push, the same mistake it
+makes for Recollection, and Photon Rush is a Laser game.
+
+`games` is the (room, gamemode) pairs a badge's wording names, matched against
+`master_document.GAMEMODES`, so that /badges can tell a room a location has from
+a room that still runs the right game: Langley has a Laser room, but it runs
+Sneak and Chopper, not Photon Rush. The competitive games are not in that list —
+they have no levels, so the site never catalogs them — and a badge played in one
+(Snake Island's Tails) names nothing and is placed by its room alone.
 
 `hint` and `giveaway` are the Easter Egg and Riddle answers. The source document
 hides them as white-on-white text because each can only be solved once; /badges
 shows them with the rest of a badge's detail once it is expanded.
 
-Two badges are graded by neither document, so `difficulty` there is this repo's
-own estimate: `difficulty_estimated` says so and `difficulty_note` says why. The
-page shows them muted and starred rather than hiding them — a soft answer beats
-a hole in the column, but it should not pass for the document's. An estimate is
-only ever a gap-filler; it never overwrites a sourced grade.
+A badge graded by neither document can carry this repo's own estimate:
+`difficulty_estimated` says so and `difficulty_note` says why. The page shows one
+muted and starred rather than hiding it — a soft answer beats a hole in the
+column, but it should not pass for the document's. An estimate is only ever a
+gap-filler; it never overwrites a sourced grade. None is in force today.
 
 A badge with no entry at all gets every field empty and renders with no detail.
 That is expected, not an error.
@@ -319,6 +439,9 @@ _EMPTY: dict[str, Any] = {
     "name": None,
     "rooms": (),
     "rooms_mode": "any",
+    # (room, gamemode) pairs the badge names; empty where it names none, and
+    # then `rooms` alone says where it is played.
+    "games": (),
     "level": None,
     "difficulty": None,
     # True where the grade is this repo's estimate rather than either document's

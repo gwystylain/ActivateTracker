@@ -14,7 +14,7 @@ Each record carries:
 
 - `description` — the document's own wording, verbatim.
 - `optimal_players` — its "Optimal # of players" column. Absent where the
-  document leaves the cell blank or holds a `?`; 13 of the 76 gamemodes are
+  document leaves the cell blank or holds a `?`; 8 of the 76 gamemodes are
   unrecorded, and the page renders those as a dash rather than guessing.
 - `optimal_disputed` — the document's `**` marker: a number is written down but
   "there isn't a clear consensus". Present only when true.
@@ -31,18 +31,21 @@ from typing import Any
 GAMEMODES: dict[str, dict[str, dict[str, Any]]] = {
     "Arena": {
         "Digby": {
+            "optimal_players": 5,
             "description": (
                 "Recreate the pattern shown on the targets for a short period of time by "
                 "throwing balls at the specific targets that lit up."
             ),
         },
         "Hunt": {
+            "optimal_players": 5,
             "description": (
                 "Hit the targets on the wall that match the one shown on the top targets. "
                 "Avoid red targets or you will lose a life."
             ),
         },
         "Memory": {
+            "optimal_players": 5,
             "description": (
                 "Hit white targets on the wall to reveal the underlying pattern. Match two "
                 "to make them disappear, and match every pair to win."
@@ -282,6 +285,12 @@ GAMEMODES: dict[str, dict[str, dict[str, Any]]] = {
                 "above. Avoid a certain number of waves of lasers to win."
             ),
         },
+        # The October 2026 edition moved Laser Maze and Photon Rush out of the
+        # Laser room and into its "Removed Games" section: Chopper replaced
+        # Photon Rush, and Louisville, the last place either ran, no longer
+        # gets the exception it had in August. Kept anyway — a lookup that never
+        # happens costs nothing, and the badge generator places Steady Stream's
+        # Photon Rush through this entry.
         "Laser Maze": {
             "description": (
                 "Like a classic spy movie, run, crawl, and jump through the laser maze "
@@ -641,11 +650,12 @@ GAMEMODES: dict[str, dict[str, dict[str, Any]]] = {
     "Trench": {
         "Defuse": {
             "description": (
-                "Defuse the moving white targets by filling them up green before they "
-                "explode. Avoid red targets, and defuse enough targets to win."
+                "Defuse the moving white target by filling it up green before it "
+                "explodes. Avoid red targets, and defuse six targets to win."
             ),
         },
         "Flash Fire": {
+            "optimal_players": 5,
             "description": (
                 "Memorize the colours of the targets overhead. The announcer will call out "
                 "a colour of target to shoot at. Hit all of these coloured targets to "
@@ -653,10 +663,11 @@ GAMEMODES: dict[str, dict[str, dict[str, Any]]] = {
             ),
         },
         "Trench": {
+            "optimal_players": 2,
             "description": (
-                "Shoot the glowing targets overhead, and avoid red targets. Once you clear "
-                "all the glowing targets, crawl through the laser maze to the other side of "
-                "the room. Then repeat and complete enough cycles to win."
+                "Shoot the blue targets overhead, and avoid red targets. Once you clear all "
+                "the blue targets, crawl through the laser maze to the other side of the "
+                "room. Press the button, then repeat and complete enough cycles to win."
             ),
         },
         "Zap": {

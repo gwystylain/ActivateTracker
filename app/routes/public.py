@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
-from .. import badge_reference
+from .. import badge_locations, badge_reference
 from .. import catalog as catalog_mod
 from .. import master_document
 from .. import streak as streak_mod
@@ -188,9 +188,10 @@ async def badge_data(request: Request) -> JSONResponse:
     """Every tracked player's badge state, in one payload.
 
     Badges are player-level — the badge API is keyed on the handle alone — so
-    unlike /api/game-data there is nothing to select by location and the page
-    never refetches. ~120 badges times a handful of players is small enough to
-    send whole and re-filter client-side.
+    the page never refetches, even to change location: what a location changes
+    is whether a badge can be done there and a few location-specific facts, and
+    both are sent for every tracked location up front. ~120 badges times a
+    handful of players is small enough to send whole and re-filter client-side.
     """
     conn = request.app.state.db
 
@@ -207,6 +208,20 @@ async def badge_data(request: Request) -> JSONResponse:
         return JSONResponse(
             {"players": [], "badges": [], "states": {}, "locations": []}
         )
+
+    locations = _badge_locations(conn)
+    for badge in catalog:
+        # Keyed by location id as a string, the way JSON will key it anyway.
+        badge["where"] = {
+            str(loc["location_id"]): w
+            for loc in locations
+            if (w := badge_locations.availability(badge, loc["games"])) is not None
+        }
+        badge["here"] = {
+            str(loc["location_id"]): f
+            for loc in locations
+            if (f := badge_locations.facts(badge, loc["games"], loc["beaten"]))
+        }
 
     reported = _reported_badges(conn)
     states: dict[str, dict[str, Any]] = {}
@@ -258,7 +273,15 @@ async def badge_data(request: Request) -> JSONResponse:
             "players": players,
             "badges": catalog,
             "states": states,
-            "locations": _rooms_by_location(conn),
+            "locations": [
+                {
+                    "location_id": loc["location_id"],
+                    "slug": loc["slug"],
+                    "name": loc["name"],
+                    "rooms": sorted({g["room"] for g in loc["games"]}),
+                }
+                for loc in locations
+            ],
         }
     )
 
@@ -380,21 +403,51 @@ def _describe_badges(badges: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return badges
 
 
-def _rooms_by_location(conn) -> list[dict[str, Any]]:
-    """Which rooms each tracked location has, so the page can say where a badge
-    is obtainable. The two locations probed genuinely differ — Pipes at Langley,
-    Portals at Coquitlam — which is what makes it worth saying."""
-    rooms: dict[int, set[str]] = defaultdict(set)
-    for r in conn.execute(
-        "SELECT DISTINCT location_id, room_name FROM location_games"
-    ).fetchall():
-        rooms[r["location_id"]].add(r["room_name"])
+def _badge_locations(conn) -> list[dict[str, Any]]:
+    """Each tracked location's catalog and who has beaten what there — the
+    inputs `badge_locations` needs to say where a badge can be done.
 
-    return [
-        {**loc, "rooms": sorted(rooms.get(loc["location_id"], ()))}
-        for loc in _tracked_locations(conn)
-        if rooms.get(loc["location_id"])
-    ]
+    The two locations probed genuinely differ — Pipes at Langley, Portals at
+    Coquitlam — which is what makes it worth saying. A location with no catalog
+    is left out entirely: an empty game list would read as "nothing can be done
+    here", which the page would turn into a wall of "no".
+    """
+    games: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for r in conn.execute(
+        """
+        SELECT location_id, room_name, game_id, game_name, levels_json
+        FROM location_games
+        ORDER BY location_id, room_order, game_order
+        """
+    ).fetchall():
+        try:
+            levels = [int(x) for x in json.loads(r["levels_json"])]
+        except (json.JSONDecodeError, TypeError, ValueError):
+            levels = []
+        games[r["location_id"]].append(
+            {
+                "room": r["room_name"],
+                "game_id": r["game_id"],
+                "name": r["game_name"],
+                "levels": levels,
+            }
+        )
+
+    out = []
+    for loc in _tracked_locations(conn):
+        if not games.get(loc["location_id"]):
+            continue
+        out.append(
+            {
+                **loc,
+                "games": games[loc["location_id"]],
+                "beaten": {
+                    r["player_id"]: set(_beaten_levels(r["raw_scores_json"]))
+                    for r in _latest_snapshots(conn, loc["location_id"])
+                },
+            }
+        )
+    return out
 
 
 def _reported_badges(conn) -> dict[int, dict[str, int | None]]:

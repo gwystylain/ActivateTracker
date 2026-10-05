@@ -42,6 +42,10 @@
                 <option value="nobody">Nobody has it</option>
             </select>
         </label>
+        <label class="inline-field" id="locationField">
+            <span>Location</span>
+            <select id="locationFilter"><option value="">Anywhere</option></select>
+        </label>
         <label class="inline-field">
             <span>Room</span>
             <select id="roomFilter"><option value="">All rooms</option></select>
@@ -53,10 +57,6 @@
         <label class="inline-field">
             <span>Search</span>
             <input type="search" id="badgeSearch" placeholder="name, description or tip">
-        </label>
-        <label class="inline-field checkbox">
-            <input type="checkbox" id="hereOnly">
-            <span>Hide badges with no room at my locations</span>
         </label>
     </div>
 
@@ -142,9 +142,11 @@
     <p class="muted small">
         Room, difficulty, players and tips come from the community
         <em>Activate Games Master Document</em> and the badge tracker at
-        activate.ryflix.ca, not from Activate. <strong>Where</strong> is a weak
-        negative: the room list behind it is each location's <em>scoring</em> rooms,
-        so the photo room is missing everywhere, and badges transfer between
+        activate.ryflix.ca, not from Activate. <strong>Where</strong> and the
+        <strong>Location</strong> filter check each location's own list of rooms
+        <em>and</em> the gamemodes they run, so a room that has swapped a game out
+        doesn't count. That list holds only <em>scoring</em> rooms, so a photo-room
+        badge reads as "can't tell" rather than "no", and badges transfer between
         locations &mdash; one earned at a venue you don't track still counts.
     </p>
 </section>

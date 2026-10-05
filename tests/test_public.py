@@ -745,3 +745,60 @@ async def test_a_location_with_no_catalog_is_left_out_of_the_rooms_list(tmp_path
     )
 
     assert (await _badges(conn))["locations"] == []
+
+
+async def test_badge_data_says_where_each_badge_can_be_done_and_adds_location_facts(tmp_path):
+    """Sent for every tracked location up front, so changing the location filter
+    never refetches. Keyed by location id; a roomless badge gets no entry."""
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    for bid, name, desc in (
+        (1, "Riddle 7.0", "Winning Activate level 7s can cause lots of stress, now do"
+                          " it back to back in all games that start with S."),
+        (2, "Riddle 5.0", "Two may be missing, but there's still twenty-four."),
+        (3, "Night Owl", "Win a game after 11 PM"),
+    ):
+        conn.execute(
+            "INSERT INTO badges (badge_id, name, description, stars, first_seen,"
+            " last_seen) VALUES (?, ?, ?, 5, '2026-08-01', '2026-08-01')",
+            (bid, name, desc),
+        )
+        conn.execute(
+            "INSERT INTO player_badges (player_id, badge_id, earned, progress,"
+            " total_progress, updated_at) VALUES (?, ?, 0, 0, 1, '2026-08-03')",
+            (pid, bid),
+        )
+    ten = json.dumps(list(range(10)))
+    conn.executemany(
+        "INSERT INTO location_games (location_id, room_id, room_name, room_order,"
+        " game_id, game_name, game_order, levels_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (72, 31, "Pipes", 0, 3102, "Scramble", 0, ten),
+            (72, 13, "Hide", 1, 1305, "Sequence", 0, ten),
+            (38, 13, "Hide", 0, 1305, "Sequence", 0, ten),
+        ],
+    )
+    # Only the newest snapshot counts: Sequence 7 was beaten after the first.
+    _snap_scores(conn, pid, 72, "2026-08-01T00:00:00", [])
+    _snap_scores(conn, pid, 72, "2026-08-02T00:00:00", [
+        {"gameId": 1305, "levelId": 6, "highScore": 5000},
+    ])
+
+    payload = await _badges(conn)
+    by_id = {b["badge_id"]: b for b in payload["badges"]}
+
+    assert by_id[2]["where"] == {
+        "72": {"status": "yes", "why": None},
+        "38": {"status": "no", "why": "no Pipes room"},
+    }
+    assert by_id[3]["where"] == {}
+    assert by_id[3]["here"] == {}
+
+    langley = by_id[1]["here"]["72"][0]
+    assert langley["text"] == "Scramble, Sequence — 2 in all"
+    assert langley["players"] == {str(pid): "level 7 not beaten yet in Scramble"}
+    # Tracked at Coquitlam but never snapshotted there: no claim either way.
+    assert by_id[1]["here"]["38"][0]["players"] == {}
+
+    assert [l["name"] for l in payload["locations"]] == ["Coquitlam", "Langley"]
+    assert payload["locations"][1]["rooms"] == ["Hide", "Pipes"]

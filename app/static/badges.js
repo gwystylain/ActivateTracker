@@ -1,8 +1,10 @@
 // /badges — who holds which badges, and what each player is closest to earning.
 //
 // Badges are per player, not per location: the badge API is keyed on the handle
-// alone, so unlike /games there is nothing to select by location and the page
-// fetches exactly once. Every filter below re-reads data already in hand.
+// alone. What a location changes is whether a badge can be done there, and the
+// server answers that for every tracked location up front (`where`, plus a few
+// location facts in `here`), so even the location filter re-reads data already
+// in hand and the page fetches exactly once.
 (function () {
     const summaryBody = document.getElementById('summaryBody');
     if (!summaryBody) return;
@@ -12,7 +14,8 @@
     const roomSel = document.getElementById('roomFilter');
     const difficultySel = document.getElementById('difficultyFilter');
     const searchInput = document.getElementById('badgeSearch');
-    const hereOnlyBox = document.getElementById('hereOnly');
+    const locationField = document.getElementById('locationField');
+    const locationSel = document.getElementById('locationFilter');
     const playerBox = document.getElementById('playerFilter');
     const statusEl = document.getElementById('badgesStatus');
     const farmerCard = document.getElementById('farmerCard');
@@ -30,9 +33,9 @@
     const CLOSE_LIMIT = 15;
     const FARM_LIMIT = 15;
     const FARMER_COLS = 6;   // #, Badge, Room, Difficulty, Players, Badges to gain
-    // Sentinel rather than prose, so the filter and the detail line can't drift
-    // apart the way two copies of the same sentence would.
-    const NOWHERE = 'No room for it at your locations';
+    // The one location-filter value that isn't a location id: doable at any of
+    // them. A sentinel, so the option and the filter can't drift apart.
+    const ANY_TRACKED = 'tracked';
     // The document's own scale, in its own order — alphabetical would put Very
     // Hard between Medium and Hard.
     const DIFFICULTIES = ['Easy', 'Medium', 'Hard', 'Very Hard'];
@@ -219,10 +222,7 @@
             }
             if (room && !(b.rooms || []).includes(room)) return false;
             if (difficulty && b.difficulty !== difficulty) return false;
-            // Never hidden on a false premise: a badge somebody holds is
-            // reachable whatever our room list says.
-            if (hereOnlyBox.checked && whereObtainable(b) === NOWHERE
-                && !earnedByAnyone(b)) return false;
+            if (!passesLocation(b, locationSel.value)) return false;
             if (!want) return true;
             const states = players.map(p => stateOf(p.id, b.badge_id));
             if (want === 'earned') return states.some(st => st && st.earned);
@@ -629,42 +629,109 @@
         });
     }
 
-    // Which tracked locations have the room this badge needs. Worth saying
-    // because the locations genuinely differ — Pipes at one and Portals at the
-    // other, so the two badges both called "Untouchable 5.0" are earned in
-    // different buildings.
+    function selectedLocation() {
+        return data.locations.find(l => String(l.location_id) === locationSel.value) || null;
+    }
+
+    // Only a definite "no" hides a badge. `unknown` is a room the site never
+    // lists — the photo room, missing from every location whether or not the
+    // building has one — and a badge with no room has no answer at all, since
+    // it can be done anywhere.
     //
-    // The negative is far weaker than the positive and is never stated as
-    // "you can't get this": the room list comes from `location.rooms`, which is
-    // only the *scoring* rooms, so the photo room is missing from every
-    // location; and badges transfer between locations, so one earned at a venue
-    // that isn't tracked here still counts. Both cases are live in this data —
-    // Photobomb and Row By Row are earned badges whose rooms we cannot see.
-    function whereObtainable(b) {
-        if (!b.rooms || !b.rooms.length || !data.locations.length) return null;
-        const ok = data.locations.filter(loc => {
-            const has = r => loc.rooms.includes(r);
-            return b.rooms_mode === 'all' ? b.rooms.every(has) : b.rooms.some(has);
-        });
-        if (!ok.length) return NOWHERE;
-        if (ok.length === data.locations.length) return 'All your locations';
-        return ok.map(l => l.name).join(', ') + ' only';
+    // "Any of my locations" is the weaker claim, so it keeps the old rule that
+    // a badge somebody holds is never hidden: badges transfer between
+    // locations, so it was done somewhere whatever our catalogs say. A chosen
+    // location makes no such exception — the question there is what can be
+    // done in that building, and a badge earned at another one can't be.
+    function passesLocation(b, value) {
+        if (!value) return true;
+        const where = b.where || {};
+        if (value === ANY_TRACKED) {
+            const answers = data.locations.map(l => where[l.location_id]).filter(Boolean);
+            if (!answers.length || answers.some(w => w.status !== 'no')) return true;
+            return earnedByAnyone(b);
+        }
+        const w = where[value];
+        return !w || w.status !== 'no';
+    }
+
+    // Where a badge can be done, across every tracked location whatever the
+    // filter says: the filter decides what is listed, this says where else.
+    // The server checks the gamemode as well as the room, so the reason can be
+    // that a room is there but runs something else — Langley's Laser room runs
+    // Chopper, and Steady Stream wants Photon Rush.
+    function whereText(b) {
+        const answers = data.locations
+            .map(loc => ({ loc, w: (b.where || {})[loc.location_id] }))
+            .filter(a => a.w);
+        if (!answers.length) return null;        // roomless, or nothing catalogued
+        const yes = answers.filter(a => a.w.status === 'yes');
+        const no = answers.filter(a => a.w.status === 'no');
+        const unknown = answers.filter(a => a.w.status === 'unknown');
+        if (yes.length === answers.length) return 'All your locations';
+        if (yes.length) {
+            return joinAnd(yes.map(a => a.loc.name)) + ' only — ' + reasons([...no, ...unknown]);
+        }
+        if (unknown.length) return "Can't tell — " + unknown[0].w.why;
+        return (earnedByAnyone(b)
+            // Evidence beats inference: somebody holds it, so it was done at
+            // a building we don't track.
+            ? 'Earned already, so somewhere else — not at your tracked locations. '
+            : 'Not at your tracked locations. ') + reasons(no);
+    }
+
+    // "Coquitlam and Langley: no Climb room", rather than the same reason twice.
+    function reasons(answers) {
+        const groups = new Map();
+        for (const a of answers) {
+            if (!groups.has(a.w.why)) groups.set(a.w.why, []);
+            groups.get(a.w.why).push(a.loc.name);
+        }
+        return [...groups].map(([why, names]) => joinAnd(names) + ': ' + why).join('; ');
+    }
+
+    function joinAnd(items) {
+        if (items.length <= 1) return items.join('');
+        return items.slice(0, -1).join(', ') + ' and ' + items[items.length - 1];
+    }
+
+    // What a badge looks like in a particular building — Riddle 7.0's S games,
+    // the level count behind Activated. Only the chosen location's when there
+    // is one; every tracked location's otherwise.
+    function factLines(b) {
+        const chosen = selectedLocation();
+        const lines = [];
+        for (const loc of chosen ? [chosen] : data.locations) {
+            for (const f of (b.here || {})[loc.location_id] || []) {
+                const value = [el('span', { className: 'fact-line' }, [
+                    el('span', { className: 'fact-place', text: loc.name }),
+                    el('span', { text: ' · ' + f.text }),
+                ])];
+                for (const p of activePlayers()) {
+                    // Progress towards a badge they already hold says nothing.
+                    const st = stateOf(p.id, b.badge_id);
+                    const said = (f.players || {})[p.id];
+                    if (!said || (st && st.earned)) continue;
+                    value.push(el('span', {
+                        className: 'fact-line muted small',
+                        text: p.display_name + ': ' + said,
+                    }));
+                }
+                lines.push(el('p', { className: 'detail-line' }, [
+                    el('span', { className: 'detail-label', text: f.label }),
+                    el('span', null, value),
+                ]));
+            }
+        }
+        return lines;
     }
 
     function detailRow(b, cols) {
         const bits = [];
 
-        const where = whereObtainable(b);
-        if (where === NOWHERE) {
-            bits.push(field('Where', earnedByAnyone(b)
-                // Evidence beats inference: somebody holds it, so the room is
-                // reachable and our room list is simply the wrong instrument.
-                ? 'Earned already, so it was done somewhere — no scoring room '
-                  + 'for it at your tracked locations'
-                : 'No scoring room for it at your tracked locations'));
-        } else if (where) {
-            bits.push(field('Where', where));
-        }
+        const where = whereText(b);
+        if (where) bits.push(field('Where', where));
+        bits.push(...factLines(b));
         if (b.level) bits.push(field('Level', b.level));
         if (b.overlapping) bits.push(field('Overlaps with', b.overlapping));
         if (b.notes) bits.push(field('Notes', b.notes));
@@ -741,8 +808,10 @@
             statusEl.textContent = 'No players selected.';
             return;
         }
+        const loc = selectedLocation();
         statusEl.textContent = shown + ' of ' + data.badges.length + ' badges shown for '
-            + players.length + ' player' + (players.length === 1 ? '' : 's') + '.';
+            + players.length + ' player' + (players.length === 1 ? '' : 's')
+            + (loc ? ' at ' + loc.name : '') + '.';
     }
 
     function fillSelect(sel, values) {
@@ -754,12 +823,41 @@
     }
 
     function fillFacetFilters() {
+        // At one location, only the rooms a badge can be done in there: rooms
+        // the location has, plus a room nobody can see (the photo room), which
+        // the location filter keeps too. Otherwise every room any badge names.
+        const loc = selectedLocation();
         const rooms = new Set();
-        for (const b of data.badges) for (const r of b.rooms || []) rooms.add(r);
+        for (const b of data.badges) {
+            if (loc && !passesLocation(b, locationSel.value)) continue;
+            const unseen = loc && ((b.where || {})[loc.location_id] || {}).status === 'unknown';
+            for (const r of b.rooms || []) {
+                if (!loc || unseen || loc.rooms.includes(r)) rooms.add(r);
+            }
+        }
         fillSelect(roomSel, [...rooms].sort());
         // Fixed list rather than what happens to be present, so the options
         // don't reshuffle as badges come and go.
         fillSelect(difficultySel, DIFFICULTIES);
+    }
+
+    function fillLocationFilter() {
+        // Nothing catalogued, nothing to choose between: every answer would be
+        // "can't tell", so the control would only ever do nothing.
+        locationField.hidden = !data.locations.length;
+        const options = [];
+        // With one location this would be that location again, give or take
+        // the earned-elsewhere exception.
+        if (data.locations.length > 1) options.push(['Any of my locations', ANY_TRACKED]);
+        for (const loc of data.locations) options.push([loc.name, String(loc.location_id)]);
+        locationSel.replaceChildren(locationSel.options[0].cloneNode(true));   // "Anywhere"
+        for (const [text, value] of options) {
+            locationSel.appendChild(el('option', { text, attrs: { value } }));
+        }
+        // Before the location select there was a checkbox meaning "any of my
+        // locations"; a viewer who ticked it lands on the same filter.
+        const saved = load('location', load('here', false) === true ? ANY_TRACKED : '');
+        locationSel.value = [...locationSel.options].some(o => o.value === saved) ? saved : '';
     }
 
     function fillPlayerFilter() {
@@ -804,6 +902,8 @@
         );
         if (!selectedPlayers.size) selectedPlayers = new Set(known);
 
+        // Location first: it decides which rooms the room filter offers.
+        fillLocationFilter();
         fillFacetFilters();
         fillPlayerFilter();
 
@@ -814,7 +914,6 @@
             const saved = load(name, '');
             if (saved && [...sel.options].some(o => o.value === saved)) sel.value = saved;
         }
-        hereOnlyBox.checked = load('here', false) === true;
 
         const savedSort = load('sort', null);
         if (savedSort && (savedSort.dir === 1 || savedSort.dir === -1)) {
@@ -836,8 +935,12 @@
             render();
         });
     }
-    hereOnlyBox.addEventListener('change', () => {
-        save('here', hereOnlyBox.checked);
+    locationSel.addEventListener('change', () => {
+        save('location', locationSel.value);
+        // A room the new location doesn't have drops back to "All rooms", and
+        // that is saved too, or a reload would quietly bring it back.
+        fillFacetFilters();
+        save('room', roomSel.value);
         render();
     });
     searchInput.addEventListener('input', render);

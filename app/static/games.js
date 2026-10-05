@@ -193,7 +193,7 @@
 
     // ---------- optimal player count ----------
     //
-    // The master document's "Optimal # of players" column. It leaves 13 of the
+    // The master document's "Optimal # of players" column. It leaves 8 of the
     // 76 gamemodes blank, which stays a dash — the page never guesses one.
 
     // A `**` in the document means a number is written down but the community

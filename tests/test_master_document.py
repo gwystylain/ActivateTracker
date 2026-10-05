@@ -14,7 +14,7 @@ def test_cooperative_rules_win_over_the_competitive_game_of_the_same_name():
 
 def test_the_room_decides_when_two_rooms_share_a_gamemode_name():
     assert lookup("Mega Laser", "Defuse")["description"].endswith("survive 8 rounds to win.")
-    assert lookup("Trench", "Defuse")["description"].endswith("defuse enough targets to win.")
+    assert lookup("Trench", "Defuse")["description"].endswith("defuse six targets to win.")
 
 
 def test_an_unambiguous_name_resolves_without_a_matching_room():
@@ -37,9 +37,10 @@ def test_gamemodes_the_document_does_not_cover_get_nothing():
 
 
 def test_an_unrecorded_player_count_is_none_not_a_guess():
-    """13 of the 76 gamemodes have a blank or '?' in the document's column."""
+    """8 of the 76 gamemodes have a blank, a '?' or no row in the document's column."""
     assert lookup("Grip", "Firewall")["optimal_players"] is None      # the '?' cell
-    assert lookup("Arena", "Digby")["optimal_players"] is None        # a blank cell
+    assert lookup("Arena", "Swat")["optimal_players"] is None         # a blank cell
+    assert lookup("Laser", "Photon Rush")["optimal_players"] is None  # retired, no row
     assert lookup("Grip", "Firewall")["description"] is not None      # but it has rules
 
 

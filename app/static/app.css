@@ -125,6 +125,7 @@ table.player-summary tr.loc-row td.loc-name { padding-left: 32px; }
 /* ---- /games: filters ---- */
 .filters { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; margin: 16px 0 4px; }
 .inline-field { display: inline-flex; flex-direction: column; gap: 4px; margin: 0; }
+.inline-field[hidden] { display: none; }
 .inline-field > span { margin: 0; color: var(--muted); font-size: 0.9em; }
 .inline-field.checkbox { flex-direction: row; align-items: center; gap: 6px; }
 .inline-field.checkbox > span { color: var(--text); }
@@ -357,6 +358,9 @@ tr.detail-row > td { background: var(--panel-2); padding: 0; }
 @media (max-width: 560px) {
     .detail-line { grid-template-columns: 1fr; gap: 0; }
 }
+/* A location fact: the location's answer, then one line per player under it. */
+.fact-line { display: block; }
+.fact-place { font-weight: 600; }
 
 /* A button inside the th rather than a clickable th: it is a real control, so
    it should be reachable by Tab and operable by Enter without inventing a role.

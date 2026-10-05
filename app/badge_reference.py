@@ -15,23 +15,33 @@ same reason, as `master_document.lookup`.
 
 Where the two sources disagree about a room, the master document wins. It was
 right about both Untouchable 5.0 rooms where the other source gave Portals for
-both, checked against the site's own catalog (`location_games`), and it is more
-complete about rooms that run the same game — "Mega Laser or Trench" where the
-other names only Mega Laser. Two conflicts are unresolved by that check because
-neither game runs at a location we track: the document puts Steady Stream's
-Photon Rush in Laser and Recollection's Memory in Arena, the other puts both in
-Push. The document's Arena/Memory agrees with `master_document.GAMEMODES`, so
-the document is taken on both.
+both, checked against the site's own catalog (`location_games`). Recollection is
+the conflict that check can't settle, since Memory runs at no location we track:
+the document puts it in Arena, the other in Push, and the document's Arena
+agrees with `master_document.GAMEMODES`.
+
+A badge only the other source lists keeps that source's room unless the room
+runs none of what the badge names, in which case the gamemode's own room is
+taken. That is Steady Stream since the October 2026 document moved it into its
+notes on retired mechanics: the other source says Push, the same mistake it
+makes for Recollection, and Photon Rush is a Laser game.
+
+`games` is the (room, gamemode) pairs a badge's wording names, matched against
+`master_document.GAMEMODES`, so that /badges can tell a room a location has from
+a room that still runs the right game: Langley has a Laser room, but it runs
+Sneak and Chopper, not Photon Rush. The competitive games are not in that list —
+they have no levels, so the site never catalogs them — and a badge played in one
+(Snake Island's Tails) names nothing and is placed by its room alone.
 
 `hint` and `giveaway` are the Easter Egg and Riddle answers. The source document
 hides them as white-on-white text because each can only be solved once; /badges
 shows them with the rest of a badge's detail once it is expanded.
 
-Two badges are graded by neither document, so `difficulty` there is this repo's
-own estimate: `difficulty_estimated` says so and `difficulty_note` says why. The
-page shows them muted and starred rather than hiding them — a soft answer beats
-a hole in the column, but it should not pass for the document's. An estimate is
-only ever a gap-filler; it never overwrites a sourced grade.
+A badge graded by neither document can carry this repo's own estimate:
+`difficulty_estimated` says so and `difficulty_note` says why. The page shows one
+muted and starred rather than hiding it — a soft answer beats a hole in the
+column, but it should not pass for the document's. An estimate is only ever a
+gap-filler; it never overwrites a sourced grade. None is in force today.
 
 A badge with no entry at all gets every field empty and renders with no detail.
 That is expected, not an error.
@@ -47,6 +57,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "10 For 10",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Very Hard",
         "difficulty_estimated": False,
@@ -69,6 +80,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Hoops",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Hoops", "15 Green"),
+        ),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -91,6 +105,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Hide",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Hide", "Words"),
+        ),
         "level": None,
         "difficulty": "Very Hard",
         "difficulty_estimated": False,
@@ -118,6 +135,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Hide",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Hide", "Numbers"),
+        ),
         "level": None,
         "difficulty": "Medium",
         "difficulty_estimated": False,
@@ -139,6 +159,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "2 For 2",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -156,6 +177,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "3 For 3",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -173,6 +195,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "4 For 4",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -190,6 +213,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "5 For 5",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -207,6 +231,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "6 For 6",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Medium",
         "difficulty_estimated": False,
@@ -224,6 +249,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "7 For 7",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Medium",
         "difficulty_estimated": False,
@@ -241,6 +267,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "8 For 8",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -258,6 +285,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "9 For 9",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -275,6 +303,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "ACTIV8",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Very Hard",
         "difficulty_estimated": False,
@@ -294,6 +323,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Activated",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Very Hard",
         "difficulty_estimated": False,
@@ -313,9 +343,11 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Adrenaline Junkie",
         "rooms": (
             "Mega Laser",
-            "Trench",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Mega Laser", "Zap"),
+        ),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -336,6 +368,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Best of Both Worlds",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -357,6 +390,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Strike",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Strike", "Terminal"),
+        ),
         "level": "Terminal 2",
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -374,6 +410,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Chasing Rainbows",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -391,6 +428,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Completionist",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -410,6 +448,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Daily High Scorer",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -429,6 +468,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Deja Vu 2.0",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -448,6 +488,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Deja Vu 3.0",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -467,6 +508,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Deja Vu 4.0",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -486,6 +528,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Deja Vu 5.0",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -505,6 +548,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Deja Vu 6.0",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -524,6 +568,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Deja Vu 7.0",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -543,6 +588,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Deja Vu 8.0",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Medium",
         "difficulty_estimated": False,
@@ -562,6 +608,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Deja Vu 9.0",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -581,6 +628,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Deja Vu Master",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -600,6 +648,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Deja Vu",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -621,6 +670,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Push",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Push", "Rings"),
+        ),
         "level": None,
         "difficulty": "Very Hard",
         "difficulty_estimated": False,
@@ -640,6 +692,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Push",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Push", "Press-cision"),
+        ),
         "level": None,
         "difficulty": "Very Hard",
         "difficulty_estimated": False,
@@ -659,6 +714,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Hoops",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Hoops", "15 Green"),
+        ),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -680,6 +738,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Press",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Press", "Gems"),
+        ),
         "level": None,
         "difficulty": "Very Hard",
         "difficulty_estimated": False,
@@ -699,6 +760,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Press",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Press", "Bullet Train"),
+        ),
         "level": None,
         "difficulty": "Very Hard",
         "difficulty_estimated": False,
@@ -716,6 +780,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Early Bird",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -735,6 +800,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Hoops",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Hoops", "Barrage"),
+        ),
         "level": "3",
         "difficulty": "Medium",
         "difficulty_estimated": False,
@@ -754,6 +822,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Strike",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Strike", "Flip"),
+        ),
         "level": "6",
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -773,6 +844,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Mega Grid",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Mega Grid", "Mega Grid"),
+        ),
         "level": "4",
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -792,6 +866,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Hide",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Hide", "Numbers"),
+        ),
         "level": "3",
         "difficulty": "Medium",
         "difficulty_estimated": False,
@@ -811,6 +888,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Mega Grid",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Mega Grid", "Statues"),
+        ),
         "level": "4",
         "difficulty": "Medium",
         "difficulty_estimated": False,
@@ -830,6 +910,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Portals",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Portals", "Stopwatch"),
+        ),
         "level": "8",
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -851,6 +934,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Hoops",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Hoops", "Trivial"),
+        ),
         "level": "2",
         "difficulty": "Medium",
         "difficulty_estimated": False,
@@ -872,6 +958,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Hide",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Hide", "Words"),
+        ),
         "level": "6",
         "difficulty": "Medium",
         "difficulty_estimated": False,
@@ -881,7 +970,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "notes": "In Words 6, when asked to spell EASTER, spell EGG instead, then complete the level.",
         "tips": (),
         "watch_out": (
-            "The word “EASTER” doesn’t pop up every time. If it doesn’t tell you to spell “EASTER”, you didn’t do anything wrong; just try the level again. Additionally, it must be the first word you’re asked to spell (as of Feb 2026). If you’re asked to spell “EASTER” in a later round, hitting the “G” for “EGG” will instead make you lose a life.",
+            "The word “EASTER” doesn’t pop up every time. If it doesn’t tell you to spell “EASTER”, you didn’t do anything wrong; just try the level again.",
         ),
         "fun_facts": (),
         "hint": "When you’re prompted for the egg, what else can you spell instead?",
@@ -893,6 +982,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Hoops",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Hoops", "Barrage"),
+        ),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -914,6 +1006,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Expanding Horizons",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -933,6 +1026,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Control",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Control", "Bop"),
+        ),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -954,6 +1050,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Push",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Push", "Blast"),
+        ),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -973,6 +1072,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Press",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Press", "Mines"),
+        ),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -990,6 +1092,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Friendly Enemies",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -1009,6 +1112,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Climb",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Climb", "Whack-A-Hold"),
+        ),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -1028,6 +1134,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Go For Gold",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -1047,6 +1154,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Halfway Mark",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Medium",
         "difficulty_estimated": False,
@@ -1068,6 +1176,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Mega Grid",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Mega Grid", "Mega Grid"),
+        ),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -1089,6 +1200,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Heating Up",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -1106,6 +1218,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Keener",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -1121,27 +1234,11 @@ BADGES: dict[str, dict[str, Any]] = {
         "hint": None,
         "giveaway": None,
     },
-    "mascot|cometoactivatewithyouractivatewaterbottleandinyouractivateshirtandhat": {
-        "name": "Mascot",
-        "rooms": (),
-        "rooms_mode": "any",
-        "level": None,
-        "difficulty": "Easy",
-        "difficulty_estimated": True,
-        "difficulty_note": "Estimated: nothing to play. The barrier is owning the three pieces of merch and remembering them, not doing anything hard.",
-        "players": None,
-        "overlapping": None,
-        "notes": None,
-        "tips": (),
-        "watch_out": (),
-        "fun_facts": (),
-        "hint": None,
-        "giveaway": None,
-    },
     "monthlyhighscorer|setamonthlyhighscoreonthelastdayofthemonth": {
         "name": "Monthly High Scorer",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -1159,6 +1256,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "My Own Competition",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -1176,6 +1274,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Night Owl",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -1195,6 +1294,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Grid",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Grid", "Grid"),
+        ),
         "level": None,
         "difficulty": "Medium",
         "difficulty_estimated": False,
@@ -1220,6 +1322,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Control",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Control", "Labyrinth"),
+        ),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -1239,6 +1344,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "OmnipoTENce",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -1260,6 +1366,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Hide",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Hide", "Spellinator"),
+        ),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -1279,6 +1388,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Climb",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Climb", "Technique"),
+        ),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -1296,9 +1408,11 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "One By One",
         "rooms": (
             "Mega Laser",
-            "Trench",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Mega Laser", "Defuse"),
+        ),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -1321,6 +1435,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Out For Blood",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -1340,6 +1455,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Push",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Push", "Match"),
+        ),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -1361,6 +1479,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Press",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Press", "Link"),
+        ),
         "level": None,
         "difficulty": "Medium",
         "difficulty_estimated": False,
@@ -1382,10 +1503,11 @@ BADGES: dict[str, dict[str, Any]] = {
             "Photo",
         ),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
-        "difficulty_estimated": True,
-        "difficulty_note": "Estimated: no skill or failure condition, just visit the photo room and take the photo.",
+        "difficulty_estimated": False,
+        "difficulty_note": None,
         "players": None,
         "overlapping": None,
         "notes": None,
@@ -1401,6 +1523,7 @@ BADGES: dict[str, dict[str, Any]] = {
             "Photo",
         ),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -1422,6 +1545,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Hoops",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Hoops", "Trivial"),
+        ),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -1442,6 +1568,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Practice Makes Perfect",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Medium",
         "difficulty_estimated": False,
@@ -1461,6 +1588,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Push",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Push", "Match"),
+        ),
         "level": None,
         "difficulty": "Very Hard",
         "difficulty_estimated": False,
@@ -1469,7 +1599,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "overlapping": None,
         "notes": None,
         "tips": (
-            "You can throw items on the floor such as wristbands, hats, glasses, and shoes to mark off where your match is.",
+            "Make sure all of your players are memorizing different pairs. It’s no use for two people to memorize the same pair when that same memory slot could be used for a different one.",
         ),
         "watch_out": (),
         "fun_facts": (),
@@ -1482,6 +1612,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Arena",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Arena", "Memory"),
+        ),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -1499,6 +1632,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Riddle 1.0",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -1516,6 +1650,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Riddle 2.0",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -1533,6 +1668,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Riddle 3.0",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -1550,6 +1686,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Riddle 4.0",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -1571,6 +1708,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Pipes",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Pipes", "Scramble"),
+        ),
         "level": "Scramble 1",
         "difficulty": "Medium",
         "difficulty_estimated": False,
@@ -1590,6 +1730,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Mega Grid",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Mega Grid", "Mega Grid"),
+        ),
         "level": "Mega Grid 1",
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -1607,6 +1750,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Riddle 7.0",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Very Hard",
         "difficulty_estimated": False,
@@ -1626,6 +1770,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Climb",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Climb", "Technique"),
+        ),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -1647,6 +1794,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Mega Grid",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Mega Grid", "Order Up"),
+        ),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -1667,6 +1817,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Scatterbrained",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -1688,6 +1839,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Hoops",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Hoops", "Barrage"),
+        ),
         "level": None,
         "difficulty": "Medium",
         "difficulty_estimated": False,
@@ -1709,6 +1863,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Mega Grid",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Mega Grid", "Jigsaw"),
+        ),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -1728,6 +1885,7 @@ BADGES: dict[str, dict[str, Any]] = {
             "Control",
         ),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Very Hard",
         "difficulty_estimated": False,
@@ -1735,7 +1893,9 @@ BADGES: dict[str, dict[str, Any]] = {
         "players": "5",
         "overlapping": "Competitive Badges",
         "notes": None,
-        "tips": (),
+        "tips": (
+            "Have two or three designated players who will have a very long tail and stay in the “danger zone” along the outside. The other players will stay small, and circle around in the middle.",
+        ),
         "watch_out": (),
         "fun_facts": (),
         "hint": None,
@@ -1747,6 +1907,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Strike",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Strike", "Terminal"),
+        ),
         "level": None,
         "difficulty": "Medium",
         "difficulty_estimated": False,
@@ -1754,7 +1917,9 @@ BADGES: dict[str, dict[str, Any]] = {
         "players": "5",
         "overlapping": None,
         "notes": None,
-        "tips": (),
+        "tips": (
+            "There is more than enough time to look over your numbers two or three times before actually throwing the ball.",
+        ),
         "watch_out": (),
         "fun_facts": (),
         "hint": None,
@@ -1766,6 +1931,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Strike",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Strike", "Dartmouth"),
+        ),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -1785,6 +1953,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Arena",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Arena", "Hunt"),
+        ),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -1804,6 +1975,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Arena",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Arena", "Digby"),
+        ),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -1821,6 +1995,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Social Butterfly",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -1838,6 +2013,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Starting a Rivalry",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -1857,6 +2033,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Laser",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Laser", "Photon Rush"),
+        ),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -1866,9 +2045,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "notes": None,
         "tips": (),
         "watch_out": (),
-        "fun_facts": (
-            "Since Photon Rush was replaced by Chopper, this badge is now unobtainable. There is one exception, however: Photon Rush still exists in the Laser room at Activate Louisville, where it hasn’t been replaced by Chopper. There, the badge is still obtainable.",
-        ),
+        "fun_facts": (),
         "hint": None,
         "giveaway": None,
     },
@@ -1876,6 +2053,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "The Gauntlet Plus",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Very Hard",
         "difficulty_estimated": False,
@@ -1893,6 +2071,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "The Gauntlet",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -1910,6 +2089,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "The Grand Tour",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -1931,6 +2111,11 @@ BADGES: dict[str, dict[str, Any]] = {
             "Mega Laser",
         ),
         "rooms_mode": "all",
+        "games": (
+            ("Hide", "Relay"),
+            ("Mega Grid", "Mega Relay"),
+            ("Mega Laser", "Laser Relay"),
+        ),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -1948,6 +2133,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "The Ultimate Winner",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -1965,6 +2151,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Thumb War",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Medium",
         "difficulty_estimated": False,
@@ -1984,6 +2171,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Grid",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Grid", "Zones"),
+        ),
         "level": None,
         "difficulty": "Medium",
         "difficulty_estimated": False,
@@ -2003,6 +2193,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Hide",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Hide", "Sequence"),
+        ),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -2022,6 +2215,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Press",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Press", "Link"),
+        ),
         "level": None,
         "difficulty": "Very Hard",
         "difficulty_estimated": False,
@@ -2041,6 +2237,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Strike",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Strike", "Flip"),
+        ),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -2060,6 +2259,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Mega Laser",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Mega Laser", "Maze"),
+        ),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -2079,6 +2281,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Climb",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Climb", "Technique"),
+        ),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -2098,6 +2303,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Mega Grid",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Mega Grid", "Order Up"),
+        ),
         "level": None,
         "difficulty": "Medium",
         "difficulty_estimated": False,
@@ -2117,6 +2325,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Pipes",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Pipes", "Piperooni"),
+        ),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -2136,6 +2347,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Portals",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Portals", "Wormholes"),
+        ),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -2155,6 +2369,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Mega Laser",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Mega Laser", "Gauntlet"),
+        ),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -2174,6 +2391,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Mega Grid",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Mega Grid", "Mega Zones"),
+        ),
         "level": None,
         "difficulty": "Medium",
         "difficulty_estimated": False,
@@ -2191,9 +2411,11 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Untouchable 8.0",
         "rooms": (
             "Mega Laser",
-            "Trench",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Mega Laser", "Defuse"),
+        ),
         "level": None,
         "difficulty": "Medium",
         "difficulty_estimated": False,
@@ -2213,6 +2435,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Strike",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Strike", "Asteroids"),
+        ),
         "level": None,
         "difficulty": "Very Hard",
         "difficulty_estimated": False,
@@ -2232,6 +2457,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Hide",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Hide", "Relay"),
+        ),
         "level": None,
         "difficulty": "Hard",
         "difficulty_estimated": False,
@@ -2251,6 +2479,9 @@ BADGES: dict[str, dict[str, Any]] = {
             "Mega Grid",
         ),
         "rooms_mode": "any",
+        "games": (
+            ("Mega Grid", "Mega Grid"),
+        ),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -2268,6 +2499,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Up to Date",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -2285,6 +2517,7 @@ BADGES: dict[str, dict[str, Any]] = {
         "name": "Win/Loss",
         "rooms": (),
         "rooms_mode": "any",
+        "games": (),
         "level": None,
         "difficulty": "Easy",
         "difficulty_estimated": False,
@@ -2305,6 +2538,9 @@ _EMPTY: dict[str, Any] = {
     "name": None,
     "rooms": (),
     "rooms_mode": "any",
+    # (room, gamemode) pairs the badge names; empty where it names none, and
+    # then `rooms` alone says where it is played.
+    "games": (),
     "level": None,
     "difficulty": None,
     # True where the grade is this repo's estimate rather than either document's
