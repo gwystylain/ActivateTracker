@@ -187,8 +187,8 @@ async def badges(request: Request):
 async def badge_data(request: Request) -> JSONResponse:
     """Every tracked player's badge state, in one payload.
 
-    Badges are player-level — the badge API is keyed on the handle alone — so
-    the page never refetches, even to change location: what a location changes
+    Badges are player-level — they transfer between locations — so the page
+    never refetches, even to change location: what a location changes
     is whether a badge can be done there and a few location-specific facts, and
     both are sent for every tracked location up front. ~120 badges times a
     handful of players is small enough to send whole and re-filter client-side.
@@ -209,13 +209,15 @@ async def badge_data(request: Request) -> JSONResponse:
             {"players": [], "badges": [], "states": {}, "locations": []}
         )
 
-    locations = _badge_locations(conn)
+    offers = _location_offers(conn)
+    locations = _badge_locations(conn, offers)
     for badge in catalog:
         # Keyed by location id as a string, the way JSON will key it anyway.
         badge["where"] = {
             str(loc["location_id"]): w
             for loc in locations
-            if (w := badge_locations.availability(badge, loc["games"])) is not None
+            if (w := badge_locations.availability(badge, loc["games"], loc["offer"]))
+            is not None
         }
         badge["here"] = {
             str(loc["location_id"]): f
@@ -224,6 +226,7 @@ async def badge_data(request: Request) -> JSONResponse:
         }
 
     reported = _reported_badges(conn)
+    names = {loc["location_id"]: loc["name"] for loc in _tracked_locations(conn)}
     states: dict[str, dict[str, Any]] = {}
     players: list[dict[str, Any]] = []
 
@@ -251,6 +254,7 @@ async def badge_data(request: Request) -> JSONResponse:
         }
         earned = sum(1 for r in rows if r["earned"])
         said = reported.get(p["id"], {})
+        offer = offers.get(said.get("location_id"))
         players.append(
             {
                 "id": p["id"],
@@ -263,6 +267,17 @@ async def badge_data(request: Request) -> JSONResponse:
                 # endpoints and a disagreement is worth seeing, not smoothing.
                 "reported_earned": said.get("earned"),
                 "reported_possible": said.get("possible"),
+                # trophyProgress counts one location's offer, so the like-for-
+                # like figure is what we hold among *those* badges. Without
+                # that location's list the page falls back to the whole count,
+                # which disagrees honestly whenever a badge was earned at a
+                # room no tracked location has.
+                "reported_location": names.get(said.get("location_id")),
+                "earned_in_scope": (
+                    sum(1 for r in rows if r["earned"] and r["badge_id"] in offer)
+                    if offer
+                    else None
+                ),
                 "updated_at": max(r["updated_at"] for r in rows),
                 **_trophy_for(earned, len(rows)),
             }
@@ -403,14 +418,24 @@ def _describe_badges(badges: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return badges
 
 
-def _badge_locations(conn) -> list[dict[str, Any]]:
-    """Each tracked location's catalog and who has beaten what there — the
-    inputs `badge_locations` needs to say where a badge can be done.
+def _location_offers(conn) -> dict[int, set[int]]:
+    """{location_id: badge ids} — each location's offer, as the site lists it."""
+    out: dict[int, set[int]] = defaultdict(set)
+    for r in conn.execute("SELECT location_id, badge_id FROM location_badges").fetchall():
+        out[r["location_id"]].add(r["badge_id"])
+    return dict(out)
+
+
+def _badge_locations(conn, offers: dict[int, set[int]]) -> list[dict[str, Any]]:
+    """Each tracked location's catalog, its badge offer, and who has beaten
+    what there — the inputs `badge_locations` needs to say where a badge can be
+    done.
 
     The two locations probed genuinely differ — Pipes at Langley, Portals at
-    Coquitlam — which is what makes it worth saying. A location with no catalog
-    is left out entirely: an empty game list would read as "nothing can be done
-    here", which the page would turn into a wall of "no".
+    Coquitlam — which is what makes it worth saying. A location with neither a
+    catalog nor the site's badge list is left out entirely: with nothing to go
+    on, every answer would be a guess, and an empty game list would read as
+    "nothing can be done here", which the page would turn into a wall of "no".
     """
     games: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for r in conn.execute(
@@ -435,12 +460,14 @@ def _badge_locations(conn) -> list[dict[str, Any]]:
 
     out = []
     for loc in _tracked_locations(conn):
-        if not games.get(loc["location_id"]):
+        lid = loc["location_id"]
+        if not games.get(lid) and lid not in offers:
             continue
         out.append(
             {
                 **loc,
-                "games": games[loc["location_id"]],
+                "games": games.get(lid, []),
+                "offer": offers.get(lid),
                 "beaten": {
                     r["player_id"]: set(_beaten_levels(r["raw_scores_json"]))
                     for r in _latest_snapshots(conn, loc["location_id"])
@@ -453,14 +480,16 @@ def _badge_locations(conn) -> list[dict[str, Any]]:
 def _reported_badges(conn) -> dict[int, dict[str, int | None]]:
     """The badge tally each player's newest snapshot read off the score page.
 
-    Independent of the badge API: this is `trophyProgress` reduced to a count at
-    poll time. Used only to corroborate — where the two disagree the page says
-    so rather than picking one.
+    Independent of the enumerated list: this is `trophyProgress` reduced to a
+    count at poll time. Used only to corroborate — where the two disagree the
+    page says so rather than picking one. The tally covers the offer of the
+    location it was read at, so that location rides along: `badge_data`
+    narrows our own count to the same badges before anything is compared.
     """
     out: dict[int, dict[str, int | None]] = {}
     for r in conn.execute(
         """
-        SELECT player_id, badges_earned, badges_possible
+        SELECT player_id, location_id, badges_earned, badges_possible
         FROM score_snapshots
         WHERE badges_earned IS NOT NULL
         ORDER BY player_id, polled_at, id
@@ -468,6 +497,7 @@ def _reported_badges(conn) -> dict[int, dict[str, int | None]]:
     ).fetchall():
         # Ascending, so the last row per player wins — the newest observation.
         out[r["player_id"]] = {
+            "location_id": r["location_id"],
             "earned": r["badges_earned"],
             "possible": r["badges_possible"],
         }
@@ -742,7 +772,8 @@ def _build_player_summaries(conn, *, today: date) -> list[dict[str, Any]]:
         latest_snap: dict[int, Any] = {}
         for r in conn.execute(
             """
-            SELECT location_id, leaderboard_position, levels_beat, level_count
+            SELECT location_id, polled_at, leaderboard_position, levels_beat,
+                   level_count, coins
             FROM score_snapshots
             WHERE player_id = ?
             ORDER BY location_id, polled_at
@@ -800,6 +831,11 @@ def _build_player_summaries(conn, *, today: date) -> list[dict[str, Any]]:
         best_position = min(positions) if positions else None
         beat_locs = [l for l in locations if l["levels_beat"] is not None]
         top_beat = max(beat_locs, key=lambda l: l["levels_beat"], default=None)
+        # Coins belong to the Activate account, not to a location — every
+        # location's snapshot from one poll carries the same figure — so the
+        # newest snapshot anywhere is the answer, and it sits on the headline
+        # row alone, like badges.
+        newest = max(latest_snap.values(), key=lambda r: r["polled_at"], default=None)
         out.append(
             {
                 "id": p["id"],
@@ -812,6 +848,7 @@ def _build_player_summaries(conn, *, today: date) -> list[dict[str, Any]]:
                 "level_count": top_beat["level_count"] if top_beat else None,
                 "badges_earned": badge_counts.get(p["id"], {}).get("earned"),
                 "badges_possible": badge_counts.get(p["id"], {}).get("possible"),
+                "coins": newest["coins"] if newest else None,
                 "days_since_last_visit": summary.days_since_last_visit,
                 "last_visit_date": summary.last_visit_date.isoformat()
                 if summary.last_visit_date

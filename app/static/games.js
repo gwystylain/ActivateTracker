@@ -301,7 +301,7 @@
     // Does this player's best *hold* the location's top score? Equal counts —
     // the top score is only ever somebody's own number, so matching it means
     // holding it (shared with whoever else tied). Greater than counts too: the
-    // room pages that supply top scores are re-read on a throttle, so a player
+    // room highscores that supply top scores are re-read on a throttle, so a player
     // who has just beaten the board reads high until the next walk.
     function holdsTop(playerId, gameId, levelId) {
         const top = topScoreOf(gameId, levelId);

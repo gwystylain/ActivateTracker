@@ -1,14 +1,25 @@
-"""Fetch & parse playactivate.com per-player score pages.
+"""Fetch & parse playactivate.com's player and location data.
 
-The page is server-rendered HTML containing a JSON hydration blob. We locate
-the player object by its unique substring marker and walk braces to find the
-matching closing brace, then json.loads the slice.
+The scores page (/scores/<handle>/<location>/scores) is a Nuxt app that renders
+nothing of the player server-side: the browser fills it from a JSON API on the
+same host, one small endpoint per concern. That API is what we read — it is
+what the page itself trusts, and it is far steadier ground than the hydration
+blob the old server-rendered page carried, which had to be sliced out of
+~370 KB of HTML by brace-walking.
+
+    /api/player/<handle>                          name, profile rank, stars, coins
+    /api/player/<handle>/location/<id>            scores, standing, trophyProgress
+    /api/player/<handle>/badges/<id>              every badge at <id>, earned or not
+    /api/location/<id>/rooms                      the location's scoring rooms
+    /api/location/<id>/games                      every gamemode, with its levels
+    /api/location/<id>/rooms/<room>/highscores    the location's best per level
+
+Every one is Cloudflare-fronted like the page, so `IMPERSONATE` still applies,
+and each answers a bad handle with a 404 HTML page rather than JSON.
 """
 from __future__ import annotations
 
-import json
 import logging
-import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -19,18 +30,21 @@ from curl_cffi.requests import AsyncSession
 
 log = logging.getLogger(__name__)
 
-BASE_URL = "https://playactivate.com/scores/{handle}/{location_id}/{slug}/scores"
-ROOM_URL = (
-    "https://playactivate.com/scores/{handle}/{location_id}/{slug}/{room}/scores"
-)
+API_BASE = "https://playactivate.com/api"
+PLAYER_URL = API_BASE + "/player/{handle}"
+PLAYER_LOCATION_URL = API_BASE + "/player/{handle}/location/{location_id}"
+PLAYER_BADGES_URL = API_BASE + "/player/{handle}/badges/{location_id}"
+LOCATION_ROOMS_URL = API_BASE + "/location/{location_id}/rooms"
+LOCATION_GAMES_URL = API_BASE + "/location/{location_id}/games"
+ROOM_HIGHSCORES_URL = API_BASE + "/location/{location_id}/rooms/{room_id}/highscores"
 
-# Badges live nowhere on the score pages above — the site shows them only on the
-# in-store score-checker iPad. This is a community-run proxy in front of an
-# official Activate badge API (a bad handle comes back as HTTP 500 with
-# {"message": "(Activate API) Internal server error"}, naming its upstream),
-# public and unauthenticated, keyed on the handle alone. Overridable via config
-# so pointing at the upstream directly, if its URL ever becomes known, is a
-# config edit rather than a code change.
+# The site's own badge endpoint above says which badges exist at a location and
+# which the player holds, but not how far along an unearned one is, nor what it
+# is worth. This community-run proxy in front of an official Activate badge API
+# (a bad handle comes back as HTTP 500 with
+# {"message": "(Activate API) Internal server error"}, naming its upstream)
+# still has both, so it stays as an optional second leg — see poller.poll_all.
+# Public and unauthenticated, keyed on the handle alone; overridable via config.
 #
 # It moved here from api.ryflix.ca, which now answers 503. The response shape is
 # unchanged, so only the URL and the origin check below differ.
@@ -40,9 +54,11 @@ BADGE_API_BASE = "https://www.activate-scores.ca/api/activate/badges"
 # playactivate.com (Cloudflare) rejects non-browser TLS handshakes with 403.
 IMPERSONATE = "chrome124"
 
-# The hydrated blob always contains  ..."player":{"player":{"playerName":...
-# This substring is sufficiently unique to anchor on.
-_ANCHOR = re.compile(r'"player"\s*:\s*\{\s*"player"\s*:\s*\{\s*"playerName"')
+# `games[].type`. Co-op gamemodes are 0 and are the only ones with levels worth
+# the name; competitive games are 4, each listed with a single level 0 that no
+# player's `scores` ever carries. Anything else is new, and logged as such.
+COOP_GAME_TYPE = 0
+COMPETITIVE_GAME_TYPE = 4
 
 
 class ScrapeError(Exception):
@@ -53,50 +69,51 @@ class ScrapeError(Exception):
 class ScrapeResult:
     handle: str
     location_id: int
-    location_slug: str
     player_name: str | None      # canonical case from the site
-    # `player.rank` — a property of the profile, not of any location: every
-    # location's page returns the same value for a given handle (verified live,
-    # langley and coquitlam both 4). Parsed for completeness; not what the
-    # dashboard shows — see `standing`.
+    # `player.rank` — a property of the profile, not of any location: it comes
+    # from /api/player/<handle>, which takes no location at all. Parsed for
+    # completeness; not what the dashboard shows — see `standing`.
     profile_rank: int | None
     stars: int | None
     coins: int | None
-    # `playerLocation.playerRank` — the number in the site's own page header,
-    # next to the Rank_N-M badge. Also not the leaderboard position.
+    # `playerLocation.playerRank` — the page's "RANK 47", which the page itself
+    # works out as totalScore // 25000 and draws with a bar to the next one.
+    # Also not the leaderboard position.
     location_player_rank: int | None
     yearly_rank: int | None
-    # `playerLocation.standing` — what the page renders as
-    # "Your Leaderboard Position: #138". Per location: on one live pull
-    # coquitlam read 138 and langley 321 for the same handle.
+    # `playerLocation.standing` — what the page renders as "PLAYER POSITION"
+    # (formerly "Your Leaderboard Position: #138"). Per location: on one live
+    # pull coquitlam read 138 and langley 321 for the same handle.
     standing: int | None
     total_score: int
     yearly_score: int
     scores: list[dict[str, int]]  # [{gameId, levelId, highScore}, ...]
-    # Levels the player has posted a score on, and how many the location has in
-    # total. The page has no explicit "levels beat" field — one entry in
-    # `scores` with a non-zero highScore is one level beaten.
+    # Levels the player has posted a score on, and the page's denominator. No
+    # endpoint states either: the page counts `scores` and sums `levels` over
+    # /games, and so do we — see `parse_games` for why that sum is not the
+    # co-op catalog's.
     levels_beat: int = 0
     level_count: int | None = None
-    # location.rooms — [{"id": 10, "name": "Hoops"}, ...]. The rooms this
-    # location has, which is what drives catalog refresh (see app/catalog.py).
-    rooms: tuple[dict[str, Any], ...] = ()
-    # playerLocation.trophyProgress — {tier: {progress, requiredBadges}} for
-    # bronze/silver/gold/platinum. The page's own badge tally, which corroborates
-    # the badge API's (see `badges_from_trophy_progress`). Absent on older
-    # captures — the committed langley fixture predates the field entirely.
+    # playerLocation.trophyProgress —
+    # {tier: {completedBadges, requiredBadges, progress, earned}} for
+    # bronze/silver/gold/platinum. The page's own badge tally; see
+    # `badges_from_trophy_progress`. Tolerated absent, since it once was.
     trophy_progress: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
 class BadgeState:
-    """One badge for one player, as the badge API reports it.
+    """One badge for one player, as one source reports it.
 
-    `badge_id` is Activate's own id and the only safe key: the API returns 118
-    badges under 117 distinct names, because "Untouchable 5.0" is two different
-    badges (id 111 Piperooni, id 125 Wormholes). Note that the community badge
-    trackers use their *own* id space, which does not line up with this one —
-    joining anything of theirs by id silently mismatches most rows.
+    `badge_id` is Activate's own id and the only safe key: the catalog has two
+    badges named "Untouchable 5.0" (id 111 Piperooni, id 125 Wormholes). The
+    site and the badge proxy share this id space. The community badge trackers
+    use their *own* ids, which do not line up — joining anything of theirs by
+    id silently mismatches most rows.
+
+    None in `progress`, `total_progress` or `stars` means "this source doesn't
+    say", never zero: the site's own badge endpoint carries none of the three,
+    and writing its silence over the proxy's numbers would erase them.
     """
 
     badge_id: int
@@ -106,127 +123,65 @@ class BadgeState:
     # How far along an unearned badge is. `total_progress` is 0 for the four
     # badges with no denominator (Completionist, Halfway Mark, Activated, The
     # Grand Tour), where `progress` is a bare running count — never divide by it.
-    progress: int
-    total_progress: int
-    stars: int | None  # the badge's own star value, unrelated to profile stars
+    progress: int | None = None
+    total_progress: int | None = None
+    stars: int | None = None  # the badge's own star value, unrelated to profile stars
 
 
 @dataclass(frozen=True)
 class RoomGame:
-    """One gamemode within a room, e.g. Hoops → "Barrage"."""
+    """One co-op gamemode within a room, e.g. Hoops → "Barrage"."""
 
-    game_id: int                 # roomGames[].id; game_id // 100 == room_id
+    game_id: int                 # games[].id; game_id // 100 == room_id
     name: str
     levels: tuple[int, ...]      # level ids, 0-based
-    order: int                   # roomGames[].roomIndex — the site's own order
+    order: int                   # games[].roomIndex — the site's own order
+    room_id: int = 0
 
 
 @dataclass(frozen=True)
-class RoomScrape:
-    room_id: int
-    room_name: str
-    games: tuple[RoomGame, ...]
-    # roomScores — the best score anyone *at this location* has posted, keyed
-    # by (game_id, level_id). Verified per-location: Coquitlam and Langley
-    # disagree on every shared Hoops entry. Sparse — a missing key means nobody
-    # at the location has ever scored that level.
-    top_scores: dict[tuple[int, int], int]
+class LocationInfo:
+    """What a location has, independent of any player: its rooms and gamemodes."""
+
+    location_id: int
+    rooms: tuple[dict[str, Any], ...]   # [{"id": 10, "name": "Hoops"}, ...], site order
+    games: tuple[RoomGame, ...]         # co-op only — see `parse_games`
+    # Every listed game's levels, competitive included: the page's own
+    # "Levels Beat" denominator. None when the location lists no games at all.
+    level_count: int | None
 
     @property
-    def level_total(self) -> int:
+    def coop_levels(self) -> int:
+        """Levels the catalog should hold once every room is walked."""
         return sum(len(g.levels) for g in self.games)
 
-
-def extract_player_blob(html: str) -> dict[str, Any]:
-    """Slice the JSON object that begins at  "player":{"player":{...  ."""
-    match = _ANCHOR.search(html)
-    if match is None:
-        raise ScrapeError("player blob anchor not found in HTML")
-
-    # Position cursor on the '{' that opens the outer player value.
-    obj_start = html.find("{", match.start() + len('"player"'))
-    if obj_start < 0:
-        raise ScrapeError("opening brace for player blob not found")
-
-    end = _find_matching(html, obj_start)
-    if end < 0:
-        raise ScrapeError("matching brace for player blob not found")
-
-    raw = html[obj_start : end + 1]
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise ScrapeError(f"player blob is not valid JSON: {e}") from e
+    def games_in(self, room_id: int) -> tuple[RoomGame, ...]:
+        return tuple(g for g in self.games if g.room_id == room_id)
 
 
-_PAIRS = {"{": "}", "[": "]"}
+def parse_player_location(
+    payload: Any,
+    *,
+    handle: str,
+    location_id: int,
+    profile: dict[str, Any] | None = None,
+    level_count: int | None = None,
+) -> ScrapeResult:
+    """A ScrapeResult from /api/player/<handle>/location/<id>.
 
-
-def _find_matching(s: str, start: int) -> int:
-    """Return the index closing the '{' or '[' at `start`, ignoring strings."""
-    opener = s[start]
-    closer = _PAIRS.get(opener)
-    if closer is None:
-        return -1
-    depth = 0
-    i = start
-    n = len(s)
-    in_string = False
-    escape = False
-    while i < n:
-        ch = s[i]
-        if in_string:
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
-        else:
-            if ch == '"':
-                in_string = True
-            elif ch == opener:
-                depth += 1
-            elif ch == closer:
-                depth -= 1
-                if depth == 0:
-                    return i
-        i += 1
-    return -1
-
-
-def _extract_json_value(html: str, key: str) -> Any | None:
-    """json.loads the object/array that `"key":` introduces, or None.
-
-    The room page's interesting props (roomInfo / roomGames / roomScores) are
-    siblings of the player blob inside a ~360 KB Inertia payload. Slicing each
-    one by name is the same trick `extract_player_blob` uses, generalised to
-    arrays, and avoids parsing the whole payload to read three keys.
+    `profile` is /api/player/<handle>, which carries the per-account numbers
+    (stars, coins, profile rank). Fetched once per handle rather than once per
+    location, so it is passed in. `level_count` comes from the location's
+    /games for the same reason.
     """
-    marker = f'"{key}":'
-    idx = html.find(marker)
-    if idx < 0:
-        return None
-    i = idx + len(marker)
-    while i < len(html) and html[i] in " \t\r\n":
-        i += 1
-    if i >= len(html) or html[i] not in _PAIRS:
-        return None
-    end = _find_matching(html, i)
-    if end < 0:
-        return None
-    try:
-        return json.loads(html[i : end + 1])
-    except json.JSONDecodeError:
-        return None
-
-
-def parse_html(html: str, *, handle: str, location_id: int, slug: str) -> ScrapeResult:
-    blob = extract_player_blob(html)
-    inner_player = blob.get("player") or {}
-    player_loc = blob.get("playerLocation") or {}
-    location = blob.get("location") or {}
-    scores = player_loc.get("scores") or []
+    if not isinstance(payload, dict):
+        raise ScrapeError(
+            f"player-location payload is {type(payload).__name__}, expected an object"
+        )
+    said = _int_or_none(payload.get("locationId"))
+    if said is not None and said != location_id:
+        raise ScrapeError(f"asked for location {location_id}, got {said}")
+    profile = profile or {}
 
     clean_scores = [
         {
@@ -234,79 +189,172 @@ def parse_html(html: str, *, handle: str, location_id: int, slug: str) -> Scrape
             "levelId": int(s.get("levelId", 0)),
             "highScore": int(s.get("highScore", 0)),
         }
-        for s in scores
+        for s in payload.get("scores") or []
         if isinstance(s, dict)
     ]
 
     return ScrapeResult(
         handle=handle,
         location_id=location_id,
-        location_slug=slug,
-        player_name=inner_player.get("playerName"),
-        profile_rank=_int_or_none(inner_player.get("rank")),
-        stars=_int_or_none(inner_player.get("stars")),
-        coins=_int_or_none(inner_player.get("coins")),
-        location_player_rank=_int_or_none(player_loc.get("playerRank")),
-        yearly_rank=_int_or_none(player_loc.get("yearlyRank")),
-        standing=_int_or_none(player_loc.get("standing")),
-        total_score=int(player_loc.get("totalScore") or 0),
-        yearly_score=int(player_loc.get("yearlyScore") or 0),
+        player_name=profile.get("playerName") or payload.get("playerName"),
+        profile_rank=_int_or_none(profile.get("rank")),
+        stars=_int_or_none(profile.get("stars")),
+        coins=_int_or_none(profile.get("coins")),
+        location_player_rank=_int_or_none(payload.get("playerRank")),
+        yearly_rank=_int_or_none(payload.get("yearlyRank")),
+        standing=_int_or_none(payload.get("standing")),
+        total_score=int(payload.get("totalScore") or 0),
+        yearly_score=int(payload.get("yearlyScore") or 0),
         scores=clean_scores,
         levels_beat=sum(1 for s in clean_scores if s["highScore"] > 0),
-        level_count=_int_or_none(location.get("levelCount")),
-        rooms=_clean_rooms(location.get("rooms")),
+        level_count=level_count,
         trophy_progress=(
-            tp if isinstance(tp := player_loc.get("trophyProgress"), dict) else None
+            tp if isinstance(tp := payload.get("trophyProgress"), dict) else None
         ),
     )
+
+
+def parse_games(payload: Any) -> tuple[tuple[RoomGame, ...], int | None]:
+    """(co-op gamemodes, the page's level denominator) from /api/location/<id>/games.
+
+    The two numbers differ on purpose. The page's "Levels Beat" divides by
+    every listed game's levels, and the list now includes the competitive games
+    — one level each, which no player's scores ever carry — so Coquitlam reads
+    242/510 where its 49 co-op gamemodes hold 490. We store the page's figure
+    against the snapshot, because the dashboard shows the number the page
+    names. The catalog holds only the co-op ones: a competitive game has no
+    levels and no leaderboard, and listing it on /games would add twenty rows
+    that read "No score" forever.
+    """
+    if not isinstance(payload, list):
+        raise ScrapeError(f"games payload is {type(payload).__name__}, expected a list")
+
+    games: list[RoomGame] = []
+    level_count = 0
+    for g in payload:
+        if not isinstance(g, dict):
+            continue
+        game_id = _int_or_none(g.get("id"))
+        if game_id is None:
+            continue
+        levels = tuple(
+            lvl
+            for lvl in (_int_or_none(x) for x in (g.get("levels") or []))
+            if lvl is not None
+        )
+        level_count += len(levels)
+        kind = _int_or_none(g.get("type"))
+        if kind != COOP_GAME_TYPE:
+            if kind != COMPETITIVE_GAME_TYPE:
+                log.warning(
+                    "game %s %r has unrecognised type %r; left out of the catalog",
+                    game_id, g.get("name"), g.get("type"),
+                )
+            continue
+        room_id = _int_or_none(g.get("roomId"))
+        order = _int_or_none(g.get("roomIndex"))
+        games.append(
+            RoomGame(
+                game_id=game_id,
+                name=str(g.get("name") or f"game-{game_id}"),
+                levels=levels,
+                order=order if order is not None else 0,
+                room_id=room_id if room_id is not None else game_id // 100,
+            )
+        )
+    # An unknown location answers [] with a 200. That is no claim about how
+    # many levels it has, so it must not read as zero.
+    return tuple(games), (level_count if payload else None)
+
+
+def parse_rooms(payload: Any) -> tuple[dict[str, Any], ...]:
+    if not isinstance(payload, list):
+        raise ScrapeError(f"rooms payload is {type(payload).__name__}, expected a list")
+    return _clean_rooms(payload)
+
+
+def parse_top_scores(payload: Any) -> dict[tuple[int, int], int]:
+    """{(game_id, level_id): score} from a room's /highscores.
+
+    The best score anyone *at this location* has posted, not a global best —
+    Coquitlam and Langley disagree on every shared Hoops entry. Sparse: a
+    missing key means nobody at the location has scored that level.
+    """
+    if not isinstance(payload, list):
+        raise ScrapeError(
+            f"highscores payload is {type(payload).__name__}, expected a list"
+        )
+    top: dict[tuple[int, int], int] = {}
+    for s in payload:
+        if not isinstance(s, dict):
+            continue
+        game_id = _int_or_none(s.get("gameId"))
+        level_id = _int_or_none(s.get("levelId"))
+        if game_id is None or level_id is None:
+            continue
+        top[(game_id, level_id)] = int(s.get("highScore") or 0)
+    return top
 
 
 def badges_from_trophy_progress(raw: Any) -> tuple[int | None, int | None]:
     """(badges earned, badges possible here) from the page's trophyProgress.
 
-    The site states each trophy tier as a fraction of its threshold rather than
-    a count: bronze 0.44 of 25, silver 0.22 of 50, gold 0.15 of 75, platinum
-    0.09 of 118 all describe the same 11 badges. Platinum's threshold is the
-    number of badges attainable *at that location* — badges needing a room the
-    location lacks are excluded — so it doubles as the denominator.
+    Each tier states `completedBadges` outright — the same count on every tier
+    — and `requiredBadges`, its threshold. Platinum's threshold is the number of
+    badges attainable *at that location* (badges needing a room it lacks are
+    excluded), so it doubles as the denominator, and it matches the length of
+    that location's /badges list exactly.
 
-    `progress` is rounded to 2dp, so a tier recovers the count to only
-    ±0.005×threshold. Reading the smallest threshold still below 1.0 keeps that
-    under ±0.375 and so exactly roundable up to 75 badges; past gold only
-    platinum's threshold is left and the count can be off by one. Nothing else
-    in the app depends on it being exact — it is the corroborating number, and
-    `player_badges` holds the enumerated truth.
+    Older payloads gave only `progress`, the 2dp fraction of each threshold.
+    That is still read as a fallback: the smallest threshold still below 1.0
+    recovers the count to ±0.005×threshold, exact up to 75 badges and ±1 past
+    gold.
     """
     if not isinstance(raw, dict):
         return (None, None)
 
-    tiers: list[tuple[int, float]] = []
+    thresholds: list[int] = []
+    completed: list[int] = []
+    fractions: list[tuple[int, float]] = []
     for rec in raw.values():
         if not isinstance(rec, dict):
             continue
         required = _int_or_none(rec.get("requiredBadges"))
-        progress = rec.get("progress")
-        if required is None or required <= 0 or not isinstance(progress, (int, float)):
+        if required is None or required <= 0:
             continue
-        tiers.append((required, float(progress)))
+        done = _int_or_none(rec.get("completedBadges"))
+        progress = rec.get("progress")
+        has_fraction = isinstance(progress, (int, float)) and not isinstance(progress, bool)
+        if done is None and not has_fraction:
+            continue
+        thresholds.append(required)
+        if done is not None:
+            completed.append(done)
+        if has_fraction:
+            fractions.append((required, float(progress)))
 
-    if not tiers:
+    if not thresholds:
         return (None, None)
+    possible = max(thresholds)
+    if completed:
+        return (max(completed), possible)
 
-    unfinished = sorted(t for t in tiers if t[1] < 1.0)
-    required, progress = unfinished[0] if unfinished else max(tiers)
-    return (round(progress * required), max(t[0] for t in tiers))
+    unfinished = sorted(t for t in fractions if t[1] < 1.0)
+    required, progress = unfinished[0] if unfinished else max(fractions)
+    return (round(progress * required), possible)
 
 
 def parse_badges(payload: Any) -> list[BadgeState]:
-    """Badge states from the badge API's JSON array.
+    """Badge states from either badge source's JSON array.
 
-    Split from `fetch_badges` so it can be exercised against a saved payload
-    with no network, the way `parse_html` is.
+    The two share a shape — {id, name, description, status} — and the proxy adds
+    progress, totalProgress and stars, which come through as None from the
+    site. Split from the fetches so it can be exercised against a saved payload
+    with no network.
     """
     if isinstance(payload, dict) and (payload.get("error") or payload.get("message")):
-        # Both spellings: the old host said {"error": ...} with a 200, the
-        # current one says {"message": ...} with a 500 that `fetch_badges`
+        # Both spellings: the proxy's old host said {"error": ...} with a 200,
+        # the current one says {"message": ...} with a 500 that the fetch
         # already turns away. Kept for the day one of them answers 200 with an
         # error object — an empty result must never read as "no badges".
         raise FetchError(
@@ -329,17 +377,17 @@ def parse_badges(payload: Any) -> list[BadgeState]:
             name=str(b.get("name") or f"badge-{badge_id}"),
             description=str(b.get("description") or ""),
             earned=bool(b.get("status")),
-            progress=_int_or_none(b.get("progress")) or 0,
-            total_progress=_int_or_none(b.get("totalProgress")) or 0,
+            progress=_int_or_none(b.get("progress")),
+            total_progress=_int_or_none(b.get("totalProgress")),
             stars=_int_or_none(b.get("stars")),
         )
     return [states[k] for k in sorted(states)]
 
 
 def _origin_headers(base: str) -> dict[str, str]:
-    """`Origin` for the badge host, derived from whatever base it was given.
+    """`Origin` for the badge proxy, derived from whatever base it was given.
 
-    The API answers an otherwise identical request with
+    The proxy answers an otherwise identical request with
     403 {"message": "Forbidden: invalid origin"} unless it carries an Origin (or
     Referer) naming its own site — a server-side header check, not a TLS
     fingerprint, so `IMPERSONATE` alone does not satisfy it. Derived rather than
@@ -350,27 +398,24 @@ def _origin_headers(base: str) -> dict[str, str]:
     return {"Origin": f"{parts.scheme}://{parts.netloc}"} if parts.netloc else {}
 
 
-async def fetch_badges(
-    handle: str,
+def _seg(value: Any) -> str:
+    """One URL path segment. Handles are the user's typing, so encode them."""
+    return quote(str(value), safe="")
+
+
+async def _get_json(
+    url: str,
     *,
     session: AsyncSession,
-    base: str = BADGE_API_BASE,
-    timeout: float = 20.0,
-) -> list[BadgeState]:
-    """Every badge applicable to `handle`, earned or not.
-
-    Per player, not per location: the endpoint takes only a handle, and badges
-    transfer between Activate locations where scores and rank do not.
-    """
-    url = f"{base.rstrip('/')}/{quote(handle, safe='')}"
-    log.info("fetch badges url=%s", url)
-    resp = await session.get(
-        url, headers=_origin_headers(base), impersonate=IMPERSONATE, timeout=timeout
-    )
+    timeout: float,
+    headers: dict[str, str] | None = None,
+) -> Any:
+    log.info("fetch url=%s", url)
+    kw = {"headers": headers} if headers else {}
+    resp = await session.get(url, impersonate=IMPERSONATE, timeout=timeout, **kw)
     if resp.status_code == 429:
         # Distinct from the catch-all below because it is not a verdict on the
-        # handle: the proxy answers this one in milliseconds without touching
-        # its upstream, and the same handle succeeds once the window rolls.
+        # request: the same URL succeeds once the window rolls.
         raise RateLimited(
             f"HTTP 429 for {url}",
             retry_after=retry_after_seconds(resp.headers.get("Retry-After")),
@@ -378,22 +423,145 @@ async def fetch_badges(
     if resp.status_code >= 400:
         raise FetchError(f"HTTP {resp.status_code} for {url}")
     try:
-        payload = resp.json()
+        return resp.json()
     except ValueError as e:
-        raise ScrapeError(f"badge response is not valid JSON: {e}") from e
-    return parse_badges(payload)
+        # A Cloudflare challenge or an error page served with a 200.
+        raise ScrapeError(f"response from {url} is not JSON: {e}") from e
 
 
-def combine_badges(per_handle: list[list[BadgeState]]) -> list[BadgeState]:
-    """Merge one multi-handle player's badge lists into a single set.
+async def fetch_profile(
+    handle: str, *, session: AsyncSession, timeout: float = 20.0
+) -> dict[str, Any]:
+    """/api/player/<handle>: {playerName, rank, stars, coins, highestBadgeTrophy}."""
+    payload = await _get_json(
+        PLAYER_URL.format(handle=_seg(handle)), session=session, timeout=timeout
+    )
+    if not isinstance(payload, dict):
+        raise ScrapeError(f"profile payload is {type(payload).__name__}, expected an object")
+    return payload
 
-    A badge counts as earned if *any* of the player's profiles has it, and an
-    unearned badge takes the furthest progress of any profile. Summing progress
-    would invent a number no account actually holds — the same reason
-    `combine_results` picks the best rank rather than averaging.
+
+async def fetch(
+    handle: str,
+    location_id: int,
+    *,
+    session: AsyncSession,
+    timeout: float = 20.0,
+    profile: dict[str, Any] | None = None,
+    level_count: int | None = None,
+) -> ScrapeResult:
+    payload = await _get_json(
+        PLAYER_LOCATION_URL.format(handle=_seg(handle), location_id=int(location_id)),
+        session=session,
+        timeout=timeout,
+    )
+    return parse_player_location(
+        payload,
+        handle=handle,
+        location_id=location_id,
+        profile=profile,
+        level_count=level_count,
+    )
+
+
+async def fetch_location(
+    location_id: int, *, session: AsyncSession, timeout: float = 20.0
+) -> LocationInfo:
+    """A location's rooms and gamemodes: two requests, shared by every player."""
+    rooms = parse_rooms(
+        await _get_json(
+            LOCATION_ROOMS_URL.format(location_id=int(location_id)),
+            session=session,
+            timeout=timeout,
+        )
+    )
+    games, level_count = parse_games(
+        await _get_json(
+            LOCATION_GAMES_URL.format(location_id=int(location_id)),
+            session=session,
+            timeout=timeout,
+        )
+    )
+    return LocationInfo(
+        location_id=location_id, rooms=rooms, games=games, level_count=level_count
+    )
+
+
+async def fetch_room_top_scores(
+    location_id: int, room_id: int, *, session: AsyncSession, timeout: float = 20.0
+) -> dict[tuple[int, int], int]:
+    return parse_top_scores(
+        await _get_json(
+            ROOM_HIGHSCORES_URL.format(location_id=int(location_id), room_id=int(room_id)),
+            session=session,
+            timeout=timeout,
+        )
+    )
+
+
+async def fetch_player_badges(
+    handle: str, location_id: int, *, session: AsyncSession, timeout: float = 20.0
+) -> list[BadgeState]:
+    """Every badge attainable at `location_id`, and whether `handle` holds it.
+
+    The site's own answer, so it is the authority on what is earned. Per
+    location in the asking but not in the holding: a badge two locations share
+    reads the same at both (99 of 99 shared at Coquitlam and Langley), because
+    badges transfer between locations where scores do not.
+
+    An empty list is refused rather than returned. No location offers zero
+    badges, but an unknown location id answers [] with a 200, and an empty
+    answer taken at its word reads as "holds nothing" — which, once the poller
+    retires against it, deletes every row the player has.
+    """
+    url = PLAYER_BADGES_URL.format(handle=_seg(handle), location_id=int(location_id))
+    states = parse_badges(await _get_json(url, session=session, timeout=timeout))
+    if not states:
+        raise ScrapeError(f"empty badge list from {url}")
+    return states
+
+
+async def fetch_badges(
+    handle: str,
+    *,
+    session: AsyncSession,
+    base: str = BADGE_API_BASE,
+    timeout: float = 20.0,
+) -> list[BadgeState]:
+    """Every badge in the catalog for `handle` from the proxy, with progress.
+
+    Per player, not per location: the endpoint takes only a handle, so it also
+    covers badges that no tracked location offers.
+    """
+    return parse_badges(
+        await _get_json(
+            f"{base.rstrip('/')}/{_seg(handle)}",
+            session=session,
+            timeout=timeout,
+            headers=_origin_headers(base),
+        )
+    )
+
+
+def _max_known(a: int | None, b: int | None) -> int | None:
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return max(a, b)
+
+
+def combine_badges(per_source: list[list[BadgeState]]) -> list[BadgeState]:
+    """Merge badge lists — several handles, several locations, both sources.
+
+    A badge counts as earned if *any* list has it earned, and takes the
+    furthest progress any list reports. Summing progress would invent a number
+    no account actually holds — the same reason `combine_results` picks the
+    best rank rather than averaging. A None (a source that doesn't say) never
+    beats a number that does.
     """
     merged: dict[int, BadgeState] = {}
-    for states in per_handle:
+    for states in per_source:
         for s in states:
             prior = merged.get(s.badge_id)
             if prior is None:
@@ -404,8 +572,8 @@ def combine_badges(per_handle: list[list[BadgeState]]) -> list[BadgeState]:
                 name=prior.name,
                 description=prior.description,
                 earned=prior.earned or s.earned,
-                progress=max(prior.progress, s.progress),
-                total_progress=max(prior.total_progress, s.total_progress),
+                progress=_max_known(prior.progress, s.progress),
+                total_progress=_max_known(prior.total_progress, s.total_progress),
                 stars=prior.stars if prior.stars is not None else s.stars,
             )
     return [merged[k] for k in sorted(merged)]
@@ -434,22 +602,6 @@ def _int_or_none(v: Any) -> int | None:
         return None
 
 
-async def fetch(
-    handle: str,
-    location_id: int,
-    slug: str,
-    *,
-    session: AsyncSession,
-    timeout: float = 20.0,
-) -> ScrapeResult:
-    url = BASE_URL.format(handle=handle, location_id=location_id, slug=slug)
-    log.info("fetch url=%s", url)
-    resp = await session.get(url, impersonate=IMPERSONATE, timeout=timeout)
-    if resp.status_code >= 400:
-        raise FetchError(f"HTTP {resp.status_code} for {url}")
-    return parse_html(resp.text, handle=handle, location_id=location_id, slug=slug)
-
-
 class FetchError(Exception):
     """Raised when the HTTP request itself fails (status, connection, timeout)."""
 
@@ -459,10 +611,10 @@ class RateLimited(FetchError):
     request was wrong.
 
     Separate from a plain `FetchError` because the two want opposite handling —
-    a 404 or a 500 means stop asking, a 429 means ask again later. Only the
-    badge proxy raises it: playactivate.com served 28 score pages back to back
-    without complaint, while somebody's personal server let five badge requests
-    through and refused the next six.
+    a 404 or a 500 means stop asking, a 429 means ask again later. In practice
+    only the badge proxy raises it: playactivate.com served 28 score pages back
+    to back without complaint, while somebody's personal server let five badge
+    requests through and refused the next six.
 
     `retry_after` is the seconds the response asked us to wait, or None if it
     didn't say. Honour it when present — guessing at a stranger's rate limit is
@@ -500,90 +652,6 @@ def retry_after_seconds(raw: Any, *, now: datetime | None = None) -> float | Non
     if when.tzinfo is None:
         when = when.replace(tzinfo=timezone.utc)
     return max(0.0, (when - (now or datetime.now(timezone.utc))).total_seconds())
-
-
-def room_slug(room_name: str) -> str:
-    """URL segment for a room's scores page: the room name, lowercased.
-
-    Not the marketing slug you see under /rooms — those are a different id
-    space and the route rejects them. `Mega Grid` is `mega%20grid`; the
-    marketing slug `mega-grid` 302s back to the location page, which parses
-    fine but carries no roomInfo (see `parse_room_html`).
-    """
-    return quote(room_name.strip().lower(), safe="")
-
-
-def parse_room_html(html: str, *, room_name: str) -> RoomScrape:
-    """Read roomInfo / roomGames / roomScores out of a room scores page."""
-    info = _extract_json_value(html, "roomInfo")
-    if not isinstance(info, dict) or _int_or_none(info.get("id")) is None:
-        # An unrecognised room segment doesn't 404 — it redirects to the
-        # location page, which is valid HTML with no roomInfo in it. Without
-        # this check that soft failure would quietly write an empty catalog.
-        raise ScrapeError(
-            f"no roomInfo for room {room_name!r} — bad slug or redirect to the location page"
-        )
-
-    games: list[RoomGame] = []
-    for g in _extract_json_value(html, "roomGames") or []:
-        if not isinstance(g, dict):
-            continue
-        game_id = _int_or_none(g.get("id"))
-        if game_id is None:
-            continue
-        order = _int_or_none(g.get("roomIndex"))
-        levels = [
-            lvl
-            for lvl in (_int_or_none(x) for x in (g.get("levels") or []))
-            if lvl is not None
-        ]
-        games.append(
-            RoomGame(
-                game_id=game_id,
-                name=str(g.get("name") or f"game-{game_id}"),
-                levels=tuple(levels),
-                order=order if order is not None else 0,
-            )
-        )
-
-    top_scores: dict[tuple[int, int], int] = {}
-    for s in _extract_json_value(html, "roomScores") or []:
-        if not isinstance(s, dict):
-            continue
-        game_id = _int_or_none(s.get("gameId"))
-        level_id = _int_or_none(s.get("levelId"))
-        if game_id is None or level_id is None:
-            continue
-        top_scores[(game_id, level_id)] = int(s.get("highScore") or 0)
-
-    return RoomScrape(
-        room_id=int(info["id"]),
-        room_name=str(info.get("name") or room_name),
-        games=tuple(games),
-        top_scores=top_scores,
-    )
-
-
-async def fetch_room(
-    handle: str,
-    location_id: int,
-    slug: str,
-    room_name: str,
-    *,
-    session: AsyncSession,
-    timeout: float = 20.0,
-) -> RoomScrape:
-    url = ROOM_URL.format(
-        handle=handle,
-        location_id=location_id,
-        slug=slug,
-        room=room_slug(room_name),
-    )
-    log.info("fetch room url=%s", url)
-    resp = await session.get(url, impersonate=IMPERSONATE, timeout=timeout)
-    if resp.status_code >= 400:
-        raise FetchError(f"HTTP {resp.status_code} for {url}")
-    return parse_room_html(resp.text, room_name=room_name)
 
 
 def combine_results(results: list[ScrapeResult]) -> ScrapeResult:
@@ -633,7 +701,6 @@ def combine_results(results: list[ScrapeResult]) -> ScrapeResult:
     return ScrapeResult(
         handle=",".join(r.handle for r in results),
         location_id=base.location_id,
-        location_slug=base.location_slug,
         player_name=results[0].player_name,
         profile_rank=_best([r.profile_rank for r in results]),
         stars=_sum([r.stars for r in results]),
@@ -646,7 +713,6 @@ def combine_results(results: list[ScrapeResult]) -> ScrapeResult:
         scores=scores,
         levels_beat=sum(1 for s in scores if s["highScore"] > 0),
         level_count=base.level_count,
-        rooms=base.rooms,
         # Badges belong to an Activate account, and two of the player's accounts
         # hold overlapping sets, so the tally that means something is the best
         # single account's — not a sum, which no account would recognise. Same

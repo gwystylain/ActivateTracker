@@ -46,10 +46,12 @@ unique visit days inside the trailing 30 days; `streak.discount_for` maps that c
 
 ### Multi-handle players
 `players.handle` is a comma-separated list of Activate profile slugs (canonicalised to
-`"a, b"` by `poller.format_handles`). One row in `player_locations` triggers N HTTP fetches
-per refresh (one per handle). `scraper.combine_results` sums totals/yearly/stars/coins and
-takes the best (min) of any leaderboard rank, then `persist_snapshot` writes ONE snapshot per
-`(player, location)` holding the combined values. Visit detection runs on combined totals.
+`"a, b"` by `poller.format_handles`). One row in `player_locations` costs two requests per
+handle per refresh (that location's scores and its badge list), and each handle's profile is
+read once per poll however many locations it has. `scraper.combine_results` sums
+totals/yearly/stars/coins and takes the best (min) of any leaderboard rank, then
+`persist_snapshot` writes ONE snapshot per `(player, location)` holding the combined values.
+Visit detection runs on combined totals.
 
 ### Chart-data semantics
 Every point carries *both* plottable metrics — `top_score` (the player's highest single-location
@@ -99,23 +101,44 @@ at that path silently.
 changes. Editing display name / locations leaves the 30-day clock alone. Any new
 `initial_streak > 0` writes today's date as the baseline; `0` clears it.
 
-### Test fixtures are real captured responses
-`tests/fixtures/gmebagholder_langley.html` is a 378 KB capture of a live playactivate *location*
-page; `tests/fixtures/coquitlam_hoops.html` is a 361 KB capture of a *room* page.
-`extract_player_blob` anchors on the unique `"player":{"player":{"playerName"` substring and
-walks braces (handling escaped quotes in strings); `_extract_json_value` does the same by key name
-for the room page's `roomInfo` / `roomGames` / `roomScores`, generalised to `[...]` values. If the
-site's hydration shape changes, these fixtures and the anchor regex are the canary.
+### The site's own API, not its page
+Since October 2026 `/scores/<handle>/<id>/scores` is a Nuxt app that renders nothing of the
+player server-side (the old `/scores/<handle>/<id>/<slug>/scores` URLs 404). The browser fills
+it from JSON endpoints on the same host, and `scraper.py` reads exactly those:
 
-`tests/fixtures/badges_gmebagholder.json` is a live capture of the badge API's 118-row
-response. It predates both the move to activate-scores.ca and the retirement of three
-badges, and is deliberately *not* re-captured: it is the pair to the same-era HTML fixtures,
-which is what lets `test_trophy_progress_recovers_the_same_count_the_badge_api_reports`
-check one source against the other. Refresh it only together with those. The langley HTML capture is old enough to predate `trophyProgress` while the
-coquitlam one has it — that pair differs in *both* capture date and page type, so it
-cannot settle where the field lives. A live poll settled it: both a location page and a
-room page return it, so it rides every poll. Anything relying on that should still tolerate
-its absence, which is what the langley fixture is now pinning.
+| Endpoint | Gives | Asked |
+|---|---|---|
+| `/api/player/<h>` | name, profile `rank`, `stars`, `coins` | once per handle per poll |
+| `/api/player/<h>/location/<id>` | `scores`, `standing`, `playerRank`, totals, `trophyProgress` | per handle per location |
+| `/api/player/<h>/badges/<id>` | every badge `<id>` offers, `status` earned or not | per handle per location |
+| `/api/location/<id>/rooms` | `[{id, name}]`, the site's order | once per location per poll |
+| `/api/location/<id>/games` | every game: `roomId`, `roomIndex`, `levels`, `type` | once per location per poll |
+| `/api/location/<id>/rooms/<room>/highscores` | the location's best per level | per room, on a catalog walk |
+
+All are Cloudflare-fronted like the page, so `IMPERSONATE` still applies, and none needs a
+cookie. A handle the site doesn't know gets its 404 *HTML* page from every player endpoint,
+which `_get_json` turns into a `FetchError`; a 200 that isn't JSON (a challenge page) is a
+`ScrapeError`. An unknown *location* id is quieter — `/rooms`, `/games` and `/badges` all
+answer `[]` with a 200 — so `parse_games` reports no level count rather than zero, and
+`fetch_player_badges` refuses an empty list outright, since retiring against it would delete
+every badge the player has. A player who has never played a location gets a 200 with zeros.
+The location slug in `player_locations` is no longer in any URL; it survives only as the
+dashboard's name for the location.
+
+### Test fixtures are real captured responses
+`tests/fixtures/site/` holds live captures of those endpoints for one handle at Coquitlam (38)
+and Langley (72), named after their paths (`player_gmebagholder_location_38.json` is
+`/api/player/gmebagholder/location/38`). `tests/fixtures/badges_gmebagholder.json` is the badge
+proxy's answer for the same handle, captured within the same minute. That pairing is the point:
+`test_the_site_and_the_proxy_agree_on_every_badge_they_share` and the trophyProgress-versus-list
+test check one source against the other, which only means anything while both describe the same
+moment. Refresh them together, never one alone.
+
+They replaced the HTML captures of the old server-rendered page and its brace-walking
+extractor, both of which went with that page. If the payloads change shape, these fixtures and
+the parsers in `scraper.py` are the canary. The captures also move on as the player plays —
+Halfway Mark was unearned in the previous proxy capture and is earned in this one — so a test
+that pins a count is stating the count *in the capture*, not a property of the badge.
 
 ### Schema is bootstrapped, not migrated
 `db.init_schema` runs `CREATE TABLE IF NOT EXISTS ...` on every startup. There is no migration
@@ -123,83 +146,96 @@ framework. Adding a column to an existing table means adding it to `SCHEMA` *and
 as a `PRAGMA table_info`-guarded `ALTER TABLE` — `CREATE TABLE IF NOT EXISTS` is a no-op on a
 deployment whose table already exists, so new columns only reach it through `_migrate`. Backfilled
 columns are NULL on old rows, so readers must tolerate None. Adding a whole new *table* needs only
-the `SCHEMA` entry (that's why `location_games` / `location_top_scores` / `location_catalog` have
-no `_migrate` clause). Existing deployments' SQLite at `/data/tracker.db` survives container
+the `SCHEMA` entry (that's why `location_games` / `location_top_scores` / `location_catalog` /
+`location_badges` have no `_migrate` clause). Existing deployments' SQLite at `/data/tracker.db` survives container
 rebuilds via the compose volume.
 
 ### Three rank-shaped numbers; the dashboard shows the one the page names
-The page carries three, and they are *different numbers on the same page* — mixing them up is the
-easiest mistake here, so all three are parsed and named after what they are:
+The data carries three, and they are *different numbers* — mixing them up is the easiest
+mistake here, so all three are parsed and named after what they are:
 
-- `playerLocation.standing` → `ScrapeResult.standing` → `score_snapshots.leaderboard_position`.
-  The page states it outright next to the score: `Your Leaderboard Position: #138`. **This is what
-  the dashboard's Leaderboard position column shows.** Per location — one live pull read 138 at
-  coquitlam and 321 at langley for the same handle.
-- `playerLocation.playerRank` → `ScrapeResult.location_player_rank` → `score_snapshots.player_rank`.
-  The number in the site's own "We're Impressed" header, inside the `Rank_10-19.png` badge (19 and 8
-  for those same two pulls). Still persisted because it has history, but not displayed — the
-  dashboard used to show this in a column labelled Rank, which is why the column read #19 while the
-  page said #138.
-- `player.rank` → `ScrapeResult.profile_rank`. A property of the profile, not of any location:
-  every location's page returns the same value (both pages above said 4). Parsed, not persisted.
+- `standing` (from `/api/player/<h>/location/<id>`) → `ScrapeResult.standing` →
+  `score_snapshots.leaderboard_position`. The page states it outright as `PLAYER POSITION`
+  (the old page said `Your Leaderboard Position: #138`). **This is what the dashboard's
+  Leaderboard position column shows.** Per location — one live pull read 16 at coquitlam and
+  508 at langley for the same handle.
+- `playerRank` (same endpoint) → `ScrapeResult.location_player_rank` →
+  `score_snapshots.player_rank`. The page's `RANK 47`, drawn with a bar reading
+  `14,912/25,000` — the page works both out from `totalScore` in steps of 25,000, and the
+  payload's value agrees. Still persisted because it has history, but not displayed — the
+  dashboard used to show this in a column labelled Rank, which is why the column read #19 while
+  the page said #138.
+- `rank` from `/api/player/<h>` → `ScrapeResult.profile_rank`. A property of the profile, not
+  of any location: the endpoint takes no location at all. Parsed, not persisted.
 
-None of these is computed from the others, and none can be. The headline row shows the best
+None of these is computed from the others by us. The headline row shows the best
 (lowest) `leaderboard_position` across the player's locations, the same rule as the headline
 discount and levels beat — a pick among values the site reported, not a blend. NULL means "not
 observed" (a snapshot predating the column) and renders as an em dash; there is no fallback to a
 different field. `combine_results` takes the best `standing` across a multi-handle player's
 profiles, which likewise picks between two queried numbers.
 
-The hydration blob has no "levels beat" field: `scraper.parse_html` derives it
-as the count of `playerLocation.scores` entries with a non-zero `highScore`, alongside
-`location.levelCount` as the denominator. That derivation is not a guess: the page also *renders*
-the answer as `Levels Beat: 106/490` in presentational markup, and the derived pair matches it
-exactly (checked live at coquitlam 106/490 and langley 49/510). The JSON blob is the more stable
-anchor than the Tailwind-classed `<p>`, so we derive rather than scrape the rendered string — but
-that string is the ground truth to re-check against if the number ever looks wrong. Note the
-committed langley fixture is an old capture (40/470), so fixture numbers lag live ones. Across
+No endpoint has a "levels beat" field. `scraper.parse_player_location` counts the `scores`
+entries with a non-zero `highScore`, and `scraper.parse_games` sums `levels` over the
+location's `/games` for the denominator — which is what the page's own script does, and the
+pair matches its `LEVELS BEAT 242/510`. **That denominator includes the competitive games**:
+`/games` lists them as `type: 4`, each with a single level 0 that no player's `scores` ever
+carries, so it reads 510 at Coquitlam where the 49 co-op gamemodes hold 490, and 530 at
+Langley against 510. The snapshot's `level_count` keeps the page's figure, because the dashboard
+shows the number the page names; the catalog keeps only co-op levels (see below), and the two
+are never compared. Snapshots from before October 2026 carry the old co-op-only figure. Across
 multiple handles `combine_results` merges the `scores` lists by `(gameId, levelId)` keeping the
 better `highScore` and counts *that*, rather than summing — a level both profiles cleared would
 otherwise count twice. On the dashboard the headline row shows the highest levels-beat across the
 player's locations, with the per-location values (and per-location ranks) in the expandable rows.
 
+Coins, like stars and profile rank, are the account's: every location's snapshot from one poll
+carries the same figure. The dashboard's Coins column therefore shows the newest snapshot's value
+on the headline row only and leaves the per-location rows blank, the same treatment badges get.
+
 ### /games: per-level breakdown and Point Farmer
 Terminology differs from the site's. What the UI calls a **Game** is the site's *room* (Hoops);
-what it calls a **gamemode** is the site's *game* (`roomGames[].id`, e.g. 1003 "Barrage"); a
-**level** is `levelId`, 0-based in the data and displayed +1. `gameId // 100 == roomId`.
+what it calls a **gamemode** is the site's *game* (`games[].id`, e.g. 1003 "Barrage"); a
+**level** is `levelId`, 0-based in the data and displayed +1. `gameId // 100 == roomId`, and
+`/games` states `roomId` outright as well.
 
-**Per-player level data costs no extra requests.** `playerLocation.scores` on the location page
-already covers *every room at the location*, and `persist_snapshot` already writes it verbatim to
-`score_snapshots.raw_scores_json`. `/api/game-data` reads the newest snapshot per
-`(player, location)` and emits only levels with `highScore > 0`; everything absent renders as
-"No score". Historic snapshots are ignored — Activate banks only the best-ever run, so the current
-row is the whole truth.
+**Per-player level data costs no extra requests.** `scores` in
+`/api/player/<h>/location/<id>` already covers *every room at the location*, and
+`persist_snapshot` writes it verbatim to `score_snapshots.raw_scores_json`. `/api/game-data`
+reads the newest snapshot per `(player, location)` and emits only levels with `highScore > 0`;
+everything absent renders as "No score". Historic snapshots are ignored — Activate banks only the
+best-ever run, so the current row is the whole truth.
 
-What *does* need fetching is the catalog (which gamemodes and levels exist) and each location's
-top scores, which live only on room pages — one request per room. `app/catalog.py` owns this:
-`needs_refresh` re-walks a location when it has never been catalogued, when a player's score there
-rose in this poll (the deliberate throttle: no score change, no room requests), or when the stored
-`catalog_levels` no longer matches `location.levelCount`. `poller.poll_all` dedupes to **one walk
+The catalog (which gamemodes and levels exist) arrives whole in the location's `/games`, which
+every poll reads anyway for the level count. What a catalog walk adds is each room's
+`/highscores` — one request per room. `app/catalog.py` owns this: `needs_refresh` re-walks a
+location when it has never been catalogued, when a player's score there rose in this poll (the
+deliberate throttle: no score change, no room requests), or when the stored `catalog_levels` no
+longer matches the co-op total `/games` lists. A room is stored — gamemodes and top scores
+together — only when its `/highscores` answered, so one failing room keeps its previous rows; a
+room with no co-op gamemodes is cleared without a request. `poller.poll_all` dedupes to **one walk
 per location per poll**, not one per player, and a catalog failure never fails the score poll.
 
-That throttle has one blind spot by design: `roomScores` is the whole venue's top score, set by
+That throttle has one blind spot by design: `/highscores` is the whole venue's top score, set by
 people we don't track, so a location where none of *our* players moved never gets its top scores
 re-read. `poll_all(..., force_catalog=True)` overrides it, exposed as the admin page's
 **Refresh + rebuild catalog** button (`POST /admin/refresh-catalog`) alongside the ordinary
 throttled **Refresh all now**.
 
-### The room-page URL segment is the room name, not the marketing slug
-`scraper.room_slug` lowercases and percent-encodes `location.rooms[].name`: `Hoops` → `hoops`,
-`Mega Grid` → `mega%20grid`. The marketing slugs under `/rooms` are a different id space and the
-scores route rejects them — `mega-grid` **302s to the location page**, which parses fine and
-carries no `roomInfo`. `parse_room_html` raises `ScrapeError` on a missing `roomInfo` precisely so
-that soft failure can't quietly record a room as having no gamemodes.
 
-### The catalog validates itself against levelCount
-Summing `len(levels)` over a location's rooms equals `location.levelCount` exactly (verified live:
-coquitlam 490, langley 510). `catalog.refresh_location` recomputes that sum from the table after
-each walk — so a partial refresh is recorded honestly — and logs a warning on a mismatch.
-A short count also makes `needs_refresh` retry on the next poll.
+### The catalog validates itself against /games
+`catalog.refresh_location` recounts levels from `location_games` after each walk — so a partial
+refresh is recorded honestly — and compares that with the co-op level total in the `/games` it
+was handed (`LocationInfo.coop_levels`: 490 at coquitlam, 510 at langley), logging a warning on a
+mismatch. `location_catalog.level_count` stores that expected co-op total, which is what the
+`/games` page's "catalog is incomplete" note compares against — never the page's
+competitive-inclusive denominator, which would flag every location as short. A short count also
+makes `needs_refresh` retry on the next poll.
+
+Only `type: 0` games are catalogued. `type: 4` is competitive; anything else is new and
+`parse_games` logs it as unrecognised rather than guessing which side it belongs on. Top scores
+are stored only for catalogued gamemodes, since nothing would ever clear one for a game the
+catalog doesn't list.
 
 The per-room gamemode lists were identical at both locations probed, but `location_games` is keyed
 per location anyway so one location's layout can never corrupt another's.
@@ -214,8 +250,8 @@ disagree about is dropped rather than answered with the wrong room's value. Toda
 `Defuse` (different rules) and only the *count* fields of `Zap` (3 at Mega Laser, unrecorded at
 Trench) — Zap's rules are identical, so those still resolve.
 
-Only **cooperative** gamemodes are listed, because those are what `roomGames` exposes — the
-competitive games have no levels and no leaderboard. Where a room runs a competitive game under
+Only **cooperative** gamemodes are listed, because those are the only ones the catalog keeps —
+the competitive games have no levels and no leaderboard. Where a room runs a competitive game under
 the same name (Hoops' Barrage, Hide's Numbers), the co-op rules are the ones written down.
 The document covers rooms Activate has built anywhere, so it is a superset of any one location;
 conversely a gamemode it hasn't caught up with gets nulls and simply renders with no tooltip and
@@ -254,30 +290,38 @@ them: without it, ticking any box would hide the 13 unrecorded gamemodes with no
 level breakdown the expanded level rows leave the cell empty — the count belongs to the gamemode,
 not to each of its levels.
 
-### Badges: counted by the score page, enumerated by a third party
-The score pages carry no badge list — the site shows badges only on the in-store
-score-checker iPad, and emails them per session. Two different sources fill that in,
-and the app keeps them apart on purpose.
+### Badges: the site says which, the proxy says how far
+Two sources, and the app keeps them apart on purpose.
 
-**The count** comes free from the page we already fetch. `playerLocation.trophyProgress`
-states four tier fractions (`{tier: {progress, requiredBadges}}`) rather than a number;
-`scraper.badges_from_trophy_progress` turns them into `(earned, possible)` and
-`persist_snapshot` writes them to `score_snapshots.badges_earned` / `badges_possible`.
-`progress` is 2dp, so a tier recovers the count only to ±0.005×threshold — hence reading
-the *smallest* threshold still under 1.0, exact up to 75 badges and ±1 only past gold.
-`platinum.requiredBadges` is the number of badges attainable **at that location** (badges
-needing a room it lacks are excluded), which is why the trophy helper drops any tier
-threshold above `possible`: a 40-badge location can never reach silver's 50, so offering
-"24 to silver" would be an errand with no end. The committed langley fixture predates the
-field entirely and parses to `(None, None)` — readers must tolerate that, and None is the
+**The site** answers which badges a player holds. `/api/player/<h>/badges/<id>` lists every
+badge that location offers — `{id, name, description, status}` and nothing more — and the poll
+asks it for each `(handle, location)` alongside the scores. Badges two locations share read the
+same at both (99 of 99 at coquitlam and langley), which is why `player_badges` has no
+`location_id`; the lists differ only in what each building can host (Wormholes' Untouchable 5.0
+needs Portals, Piperooni's needs Pipes). Its ids are the proxy's ids, and on every badge both
+list they agree on name, description and earned. It is the authority on earned, and it needs no
+opt-in: it is the same host and the same budget as the scores.
+
+**The count** comes free with the scores. `trophyProgress` gives each tier as
+`{completedBadges, requiredBadges, progress, earned}`; `completedBadges` is the exact count (the
+same on every tier), and `scraper.badges_from_trophy_progress` reads it into
+`score_snapshots.badges_earned` / `badges_possible`. Older payloads had only `progress`, a 2dp
+fraction of each threshold, and that is still the fallback — reading the *smallest* threshold
+still under 1.0 is exact up to 75 badges and ±1 past gold. `platinum.requiredBadges` is the
+number of badges attainable **at that location**, and matches that location's `/badges` list
+length exactly (101 at both), which is why the trophy helper drops any tier threshold above
+`possible`: a 40-badge location can never reach silver's 50, so offering "24 to silver" would be
+an errand with no end. A payload without the field parses to `(None, None)` — None is the
 absence of a claim, not zero.
 
-**Which badges** comes from `www.activate-scores.ca/api/activate/badges/<handle>`, a
-community-run proxy in front of an official Activate badge API (a bad handle returns
-HTTP 500 with `{"message": "(Activate API) Internal server error"}`, naming its upstream).
-Public, unauthenticated, keyed on the handle alone. It moved here from
-`api.ryflix.ca/api/badges/activate-sync/<handle>`, which now answers 503 — the response
-shape is byte-identical, so only the URL and the origin check below changed.
+**The proxy** answers how far. `www.activate-scores.ca/api/activate/badges/<handle>` is a
+community-run proxy in front of an official Activate badge API (a bad handle returns HTTP 500
+with `{"message": "(Activate API) Internal server error"}`, naming its upstream). Public,
+unauthenticated, keyed on the handle alone, and the only source of three things the site's list
+lacks: **partial progress** towards each unearned badge, each badge's **star value**, and the
+badges **no tracked location offers** — Row By Row needs a Climb room, so only the proxy can say
+it was earned elsewhere. It moved here from `api.ryflix.ca/api/badges/activate-sync/<handle>`,
+which now answers 503; the response shape is byte-identical.
 
 **It 403s a request with no `Origin`.** `{"message": "Forbidden: invalid origin"}`, returned
 to plain curl *and* to curl_cffi under `IMPERSONATE` — this is a server-side header check,
@@ -285,15 +329,17 @@ not a TLS fingerprint, so it is not the Cloudflare problem in different clothes 
 impersonation does not address it. Either an `Origin` or a `Referer` naming the site
 satisfies it; `scraper._origin_headers` derives the former from `badges.api_base` rather
 than taking it as separate config, so a repointed base cannot leave behind a stale origin
-that 403s every request. It returns every badge applicable to the player — earned or
-not, with name, description, star value and **partial progress** — so there is no separate
-catalog fetch and `badges` is a mirror of upstream, refreshed on every poll.
+that 403s every request.
 
 Because it is somebody's personal server it is `config.badges.api_base`, and `poll_all`
-takes `badge_cfg` **opt-in**: without it the poll is scores and catalog only, so no caller
-reaches a third party by omission. A badge failure increments `badges_errors` and never
-fails the score poll, the same treatment the catalog gets. If the proxy disappears the
-dashboard's count survives on `trophyProgress` and only the per-badge detail goes stale.
+takes `badge_cfg` **opt-in**: without it the poll never leaves playactivate.com, so no caller
+reaches a third party by omission. A proxy failure increments `badges_errors` and never fails
+the score poll; earned badges still update from the site.
+
+**The site's silence is not zero.** `BadgeState.progress`, `total_progress` and `stars` are None
+from the site, and `persist_badges` writes them through `COALESCE`, so a night when only the site
+answered keeps the proxy's last numbers rather than erasing them. `player_badges.progress_at`
+says when the proxy last spoke for a row; `updated_at` is when its earned state was last read.
 
 ### The badge proxy rate-limits, and the losers used to be the same every night
 The predecessor at api.ryflix.ca was far stricter than playactivate.com, which serves 28
@@ -312,20 +358,24 @@ asking. Only the former is retried, waiting the response's own `Retry-After` whe
 one (`scraper.retry_after_seconds` handles both RFC forms) and a doubling backoff when it
 doesn't. A wait over `max_wait_seconds` gives up instead: a poll holds `_poll_lock`, so an
 hour asleep here is an hour the scheduler and the admin's Refresh button spend blocked, to
-save one day of staleness on one player's badges.
+save one day of staleness on one player's badge progress.
 
 Dropping a 429 was not merely lossy, it was *unfair*: the leg ran in score-poll order, which
 is stable, so the same players lost every night — two sat ten days stale and one had never
 had a single successful fetch, while the dashboard showed counts that were true when written.
-`poller.badge_order` now runs stalest-first (no rows at all leads), so whoever lost last
-night is first in line tonight and a short window rotates over the roster instead of pinning
-it. Note that hidden players are polled too and consume the same budget.
+`poller.badge_order` now runs stalest-first by `progress_at` (never answered leads), so whoever
+lost last night is first in line tonight and a short window rotates over the roster instead of
+pinning it. It must be `progress_at`, not `updated_at`: the site rewrites every row's
+`updated_at` nightly, which would call everyone fresh and hand the order back to player id.
+Note that hidden players are polled too and consume the same budget.
 
 **A partial answer is never persisted.** `combine_badges` can only OR together what it was
 handed and `persist_badges` writes `earned` from that, so writing one handle of a two-handle
-player would clear every badge only the other profile holds. If any of a player's handles
-failed, the write is skipped entirely (`badges_skipped`) and last poll's rows stand — older
-but true, and `/badges` states the date it is showing.
+player — or one of a player's locations — would clear every badge only the missing answer
+holds. `poller._write_badges` therefore takes each source whole or not at all: the site's when
+every `(handle, location)` answered, the proxy's when every handle did. Either alone is enough
+to write; with neither, the write is skipped (`badges_skipped`) and last poll's rows stand —
+older but true, and `/badges` states the date it is showing.
 
 **Upstream retires badges, so `poller._retire_badges` deletes.** Go For Gold, Recollection
 and Sniper Shot 1.0 went in the move, taking the catalog from 118 to 115, and Mascot followed
@@ -336,7 +386,12 @@ as that player's row count. A player's rows are pruned to the ids their own payl
 then a `badges` row is dropped once no player is left holding it: the foreign key makes that
 order mandatory, and it is what lets a player whose poll was skipped keep their row until
 theirs lands. This leans entirely on the partial-answer rule above — a list short by a failed
-handle would otherwise read as "upstream dropped these". `badge_reference.py` still carries
+handle would otherwise read as "upstream dropped these" — and on one more: **only an answer
+that defines the whole catalog may retire.** The proxy's does. The site's covers just the
+tracked locations' badges, so it retires only when the proxy is switched off (then nothing else
+will ever speak for the rest, and the denominator is honestly theirs); on a night the proxy is
+merely down, retiring on the site's list would delete Row By Row and every other badge only the
+proxy reports. `badge_reference.py` still carries
 entries for the first three, because the document still describes them; a lookup that never
 happens costs nothing.
 
@@ -357,7 +412,13 @@ Four traps, all of them load-bearing:
 
 `player_badges` has no `location_id`: badges transfer between locations where scores and
 rank do not, so the dashboard shows one count on the player row and leaves the
-per-location rows blank. `earned_on` is stamped only on an observed false→true transition
+per-location rows blank. The dashboard's figure is the enumerated union — with the proxy on,
+the whole catalog (33 of 114 for one live profile) — while `trophyProgress` counts one
+location's offer (32 of 101). So `/badges` doesn't compare those two: `badge_data` sends
+`earned_in_scope`, what the player holds among the badges the tallying location offers
+(from `location_badges`, below), and the page warns only when *that* disagrees with the
+tally. Without the location's stored list it falls back to the whole count, which then
+disagrees honestly for anyone holding a badge no tracked location offers. `earned_on` is stamped only on an observed false→true transition
 and dated `streak.activity_day` — the same one-day backdate the visit rows get, so a badge
 and the visit from the same session can't disagree. On a player's *first* poll there is no
 transition to observe, so everything already earned is left NULL rather than backdated to
@@ -366,9 +427,9 @@ today, which would be a fabricated date. Multi-handle players go through
 person's accounts hold overlapping sets, so a sum is a total neither account has.
 
 `/badges` shows the enumerated count and the page's own tally side by side and says so
-when they disagree, rather than picking a winner. Note "badge" already meant the
-`Rank_10-19.png` header image in `scraper.py`/`db.py` and `.rec-badge` is the records
-crown in `app.css`; the achievement sense is the newcomer.
+when they disagree, rather than picking a winner. Note `.rec-badge` is the records crown in
+`app.css`, not an achievement; the old page's `Rank_10-19.png` header badge, which once
+shared the word, went with that page.
 
 ### Badge reference data is keyed by name *and* description
 Activate publishes a badge's name, description and star value and nothing else — no
@@ -435,11 +496,22 @@ outright alongside the other detail, so expanding a badge is enough to spend tha
 is a deliberate call — the page exists to surface everything known about a badge — but
 it is the reason the detail is behind a click at all rather than sitting in the grid.
 
-### /badges by location: the gamemode, not just the room
+### /badges by location: the site's list first, then the gamemode
 `app/badge_locations.py` answers, per badge and per tracked location, whether it can be
 done there (`where`) and any location-specific facts (`here`); `/api/badge-data` sends both
 for every location up front, so the Location filter never refetches. Pure functions over
-`location_games` rows, so the rules are tested without a database.
+`location_games` rows and the location's offer, so the rules are tested without a database.
+
+**The site's own list decides.** `location_badges` holds, per location, the badge ids the
+site's per-location badge list carried — the poll already reads that list for every
+`(handle, location)`, so storing it costs nothing. The list is the same whoever asks, so
+`poller.persist_location_badges` swaps in the union of whichever answers landed, and a
+location none answered for keeps last night's rows. With a location's list, every badge's
+answer is the site's: on it is `yes`, off it is `no` — photo-room and roomless badges
+included, which the inference below can't place — and there is never an `unknown`. A `no`
+keeps the inference's reason when the inference agreed ("no Climb room") and otherwise says
+`NOT_OFFERED`. A location with a list but no catalog yet is still answered for. Everything
+below is the fallback for a location with no stored list, and the source of the reasons.
 
 **Availability checks the gamemode as well as the room.** Rooms swap what they run:
 Langley has a Laser room, but it runs Sneak and Chopper, and Steady Stream wants Photon
@@ -460,13 +532,16 @@ is the weaker claim, so it keeps the older rule: a badge somebody already holds 
 hidden, because badges transfer between locations — `Row By Row` (Climb, at neither tracked
 location) is earned all the same, which is also why the **Where** line words that case as
 "earned already, so somewhere else" rather than "you can't get this". Choosing a location
-narrows the Room filter to rooms doable there and limits the detail panel's facts to it.
+narrows the Room filter to rooms doable there and limits the detail panel's facts to it;
+a room the catalog can't see (the photo room) is offered there whenever a badge needing it
+is answered `yes` or `unknown`.
 
 **Facts** are keyed by badge name in `badge_locations._RULES`: Riddle 7.0's co-op S games
 with a level 7, Activated's and Halfway Mark's level counts (half rounds up, so an odd
 count never reads as done a level early), The Grand Tour's rooms in the site's order, and
 Completionist's co-op game count — a floor only, since competitive games count towards it
-and the site never lists them. Per-player lines come from the newest snapshot at that
+and the catalog keeps only co-op ones (`/games` does list them now, as `type: 4`, so the
+floor could become the full count if the catalog ever stores them). Per-player lines come from the newest snapshot at that
 location, intersected with the catalog so a count can't exceed its total, and the page
 skips them for a player who already holds the badge.
 
@@ -505,14 +580,14 @@ element that needs more width belongs in a `.table-wrap`, or it will simply be c
 has run out of table stops there instead of chaining into the page or into Chrome for
 Android's back-navigation gesture. `.mode-tip` sets the same for its vertical scroll.
 
-### roomScores is per-location and sparse
-`roomScores` is the best score anyone *at that location* has posted, not a global best: coquitlam
-and langley disagree on every shared Hoops entry. It is also sparse — langley returns 38 rows
-where coquitlam returns 40 — and a missing entry means nobody at that location has ever scored
-that level. The `/games` table shows that as a dash. Point Farmer can't, since a level nobody has
-touched would then rank *below* one people have already played, which is backwards; `games.js`
-substitutes the median top score for the same level index across the location (scores track the
-level number closely, level 1 ≈ 2k up to level 10 ≈ 10k).
+### Top scores are per-location and sparse
+A room's `/highscores` is the best score anyone *at that location* has posted, not a global
+best: coquitlam and langley disagree on every shared Hoops entry. It is also sparse — langley
+returns 38 Hoops rows where coquitlam returns 40 — and a missing entry means nobody at that
+location has ever scored that level. The `/games` table shows that as a dash. Point Farmer can't,
+since a level nobody has touched would then rank *below* one people have already played, which is
+backwards; `games.js` substitutes the median top score for the same level index across the
+location (scores track the level number closely, level 1 ≈ 2k up to level 10 ≈ 10k).
 
 The **Never scored** card lists those gaps directly, one row per gamemode with the missing level
 numbers. A stored `top_score` of 0 counts as never scored alongside a missing row — the site can

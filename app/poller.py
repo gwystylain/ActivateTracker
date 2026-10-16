@@ -22,6 +22,10 @@ log = logging.getLogger(__name__)
 
 _poll_lock = asyncio.Lock()
 
+# What a failed request to playactivate.com looks like. Anything else escaping
+# a fetch is a bug, and is left to propagate.
+_FETCH_FAILURES = (RequestException, scraper.ScrapeError, scraper.FetchError)
+
 
 def parse_handles(raw: str) -> list[str]:
     """Parse a comma-separated handle string into a deduped, lowercase list.
@@ -48,25 +52,29 @@ def format_handles(handles: list[str]) -> str:
 def badge_order(
     conn: sqlite3.Connection, seen_players: dict[int, list[str]]
 ) -> list[tuple[int, list[str]]]:
-    """Players in staleness order: never fetched first, then oldest first.
+    """Players in proxy-staleness order: never fetched first, then oldest first.
 
-    The badge leg used to run in score-poll order, which is stable — so when the
+    The proxy leg used to run in score-poll order, which is stable — so when the
     proxy's rate limit cut the leg short it cut the *same* players short every
     night and they starved, one of them never having had a single successful
     fetch. Sorting by what we already hold makes that self-correcting: whoever
     lost last night is first in line tonight, and a limit that only allows five
     handles through rotates over the roster instead of pinning it.
 
+    Read off `progress_at`, not `updated_at`: the site's own badge list now
+    refreshes every row nightly, so `updated_at` would call everyone fresh and
+    hand the order straight back to player id.
+
     Ties break on player id purely so the order is deterministic.
     """
     freshness = {
-        r["player_id"]: r["updated_at"]
+        r["player_id"]: r["progress_at"]
         for r in conn.execute(
-            "SELECT player_id, MAX(updated_at) AS updated_at"
+            "SELECT player_id, MAX(progress_at) AS progress_at"
             " FROM player_badges GROUP BY player_id"
         ).fetchall()
     }
-    # "" sorts before any ISO timestamp, so a player with no badge rows at all
+    # "" sorts before any ISO timestamp, so a player with no proxy data at all
     # leads — that is the one whose fetch has never once succeeded.
     return sorted(
         seen_players.items(), key=lambda kv: (freshness.get(kv[0]) or "", kv[0])
@@ -92,7 +100,7 @@ async def fetch_badges_with_retry(
     `max_wait_seconds` gives up rather than sleeping it off, because a poll
     holds a global lock: an hour inside this function is an hour the scheduler
     and the admin's Refresh button spend blocked, to save one day of staleness
-    on one player's badges.
+    on one player's badge progress.
     """
     delay = badge_cfg.backoff_seconds
     for attempt in range(badge_cfg.max_retries + 1):
@@ -128,16 +136,23 @@ async def poll_all(
     Serialised on a global lock so the manual button can't pile up concurrent
     polls or race the daily scheduler.
 
-    `badge_cfg` is opt-in: without it the poll fetches scores and the catalog
-    only. Badges are the one leg that leaves playactivate.com for a third
-    party's proxy, so a caller asks for them explicitly.
+    Four legs, in order, all but the third on playactivate.com:
+
+    1. Each tracked location's rooms and gamemodes, once per location — the
+       level count every snapshot there is measured against.
+    2. Each (player, location): the handle's profile (once per handle), its
+       scores there, and the site's badge list there.
+    3. `badge_cfg`, opt-in: the community proxy, for badge progress and stars,
+       which the site's own list doesn't carry. Without it the poll never
+       leaves playactivate.com, so no caller reaches a third party by omission.
+    4. The catalog walk, throttled to locations where a score moved.
 
     `force_catalog` re-walks every location's rooms even when nothing suggests
     it changed. Normally the walk is throttled to score changes (see
-    `catalog.needs_refresh`), which keeps a quiet poll to one request per
-    player — but that also means the locations' *top* scores only get re-read
-    when one of our own players moves. Other people at the venue keep setting
-    new ones, so the admin page offers this as an explicit override.
+    `catalog.needs_refresh`) — but that also means the locations' *top* scores
+    only get re-read when one of our own players moves. Other people at the
+    venue keep setting new ones, so the admin page offers this as an explicit
+    override.
     """
     if _poll_lock.locked():
         log.info("poll_all skipped: another poll is in progress")
@@ -148,8 +163,7 @@ async def poll_all(
             """
             SELECT p.id          AS player_id,
                    p.handle      AS handle,
-                   pl.location_id AS location_id,
-                   pl.slug       AS slug
+                   pl.location_id AS location_id
             FROM players p
             JOIN player_locations pl ON pl.player_id = p.id
             ORDER BY p.id, pl.location_id
@@ -161,6 +175,7 @@ async def poll_all(
             "errors": 0,
             "visits_inserted": 0,
             "snapshots": 0,
+            "location_errors": 0,
             "catalog_locations": 0,
             "catalog_rooms": 0,
             "catalog_errors": 0,
@@ -175,151 +190,177 @@ async def poll_all(
 
         jitter_lo, jitter_hi = poll_cfg.jitter_seconds
         first_request = True
-        # One entry per location, not per player: the catalog is player-
-        # independent, so several players at one location still cost one
-        # refresh. `changed` is sticky — any player's score rising there is
-        # enough to re-read the room pages.
-        seen_locations: dict[int, dict] = {}
-        # Badges are per player, not per (player, location) — the endpoint takes
-        # only a handle — so a player at three locations still costs one fetch
-        # per handle, taken once after the score loop.
-        seen_players: dict[int, list[str]] = {}
+
+        async def pace() -> None:
+            nonlocal first_request
+            if not first_request:
+                await asyncio.sleep(random.uniform(jitter_lo, jitter_hi))
+            first_request = False
+
+        timeout = poll_cfg.request_timeout_sec
+        proxy_on = badge_cfg is not None and badge_cfg.enabled
 
         async with AsyncSession() as session:
+            # ---- 1. locations ----
+            locations: dict[int, scraper.LocationInfo] = {}
+            for location_id in sorted({r["location_id"] for r in rows}):
+                await pace()
+                try:
+                    locations[location_id] = await scraper.fetch_location(
+                        location_id, session=session, timeout=timeout
+                    )
+                except _FETCH_FAILURES as e:
+                    # Scores still poll without it; they just carry no level
+                    # count, and the catalog isn't walked this time.
+                    counters["location_errors"] += 1
+                    log.warning("location fetch failed location=%s err=%s", location_id, e)
+
+            # ---- 2. scores and the site's badges ----
+            profiles: dict[str, dict | None] = {}
+            # Sticky per location: any player's score rising there is enough to
+            # re-read its rooms, and several players at one location still cost
+            # one walk.
+            changed: dict[int, bool] = {}
+            seen_players: dict[int, list[str]] = {}
+            site_badges: dict[int, list[list[scraper.BadgeState]]] = {}
+            site_failed: dict[int, int] = {}
+            # Each location's offer, from whichever handles' badge lists landed.
+            offers: dict[int, set[int]] = {}
+
             for row in rows:
+                player_id = row["player_id"]
+                location_id = row["location_id"]
                 handles = parse_handles(row["handle"])
-                seen_players.setdefault(row["player_id"], handles)
+                seen_players.setdefault(player_id, handles)
+                site_badges.setdefault(player_id, [])
+                info = locations.get(location_id)
+
                 results: list[scraper.ScrapeResult] = []
                 for handle in handles:
-                    if not first_request:
-                        await asyncio.sleep(random.uniform(jitter_lo, jitter_hi))
-                    first_request = False
+                    if handle not in profiles:
+                        await pace()
+                        try:
+                            profiles[handle] = await scraper.fetch_profile(
+                                handle, session=session, timeout=timeout
+                            )
+                        except _FETCH_FAILURES as e:
+                            # Most often a handle the site doesn't know, which
+                            # 404s on every endpoint — so not retried per
+                            # location, only counted.
+                            profiles[handle] = None
+                            log.warning("profile fetch failed handle=%s err=%s", handle, e)
+                    if profiles[handle] is None:
+                        counters["errors"] += 1
+                        site_failed[player_id] = site_failed.get(player_id, 0) + 1
+                        continue
+
+                    await pace()
                     try:
                         results.append(
                             await scraper.fetch(
                                 handle,
-                                row["location_id"],
-                                row["slug"],
+                                location_id,
                                 session=session,
-                                timeout=poll_cfg.request_timeout_sec,
+                                timeout=timeout,
+                                profile=profiles[handle],
+                                level_count=info.level_count if info else None,
                             )
                         )
-                    except (RequestException, scraper.ScrapeError, scraper.FetchError) as e:
+                    except _FETCH_FAILURES as e:
                         counters["errors"] += 1
+                        site_failed[player_id] = site_failed.get(player_id, 0) + 1
                         log.warning(
                             "poll failed handle=%s location=%s err=%s",
-                            handle, row["location_id"], e,
+                            handle, location_id, e,
                         )
                         continue
+
+                    await pace()
+                    try:
+                        states = await scraper.fetch_player_badges(
+                            handle, location_id, session=session, timeout=timeout
+                        )
+                        site_badges[player_id].append(states)
+                        offers.setdefault(location_id, set()).update(
+                            s.badge_id for s in states
+                        )
+                    except _FETCH_FAILURES as e:
+                        counters["badges_errors"] += 1
+                        site_failed[player_id] = site_failed.get(player_id, 0) + 1
+                        log.warning(
+                            "badge fetch failed handle=%s location=%s err=%s",
+                            handle, location_id, e,
+                        )
 
                 if not results:
                     continue
 
                 combined = scraper.combine_results(results)
-                inserted_visit = persist_snapshot(conn, row["player_id"], combined)
+                inserted_visit = persist_snapshot(conn, player_id, combined)
                 counters["polled"] += 1
                 counters["snapshots"] += 1
                 if inserted_visit:
                     counters["visits_inserted"] += 1
+                changed[location_id] = changed.get(location_id, False) or inserted_visit
 
-                loc = seen_locations.setdefault(
-                    combined.location_id,
-                    {
-                        "slug": row["slug"],
-                        # A handle that just fetched cleanly, so the room pages
-                        # will resolve too. Not `combined.handle`, which is the
-                        # comma-joined list for a multi-handle player.
-                        "handle": results[0].handle,
-                        "rooms": combined.rooms,
-                        "level_count": combined.level_count,
-                        "changed": False,
-                    },
-                )
-                loc["changed"] = loc["changed"] or inserted_visit
-                if combined.rooms:
-                    loc["rooms"] = combined.rooms
-                    loc["level_count"] = combined.level_count
+            for location_id, badge_ids in offers.items():
+                persist_location_badges(conn, location_id, badge_ids)
 
-            # Opt-in: no config means scores and catalog only. Badges are the
-            # one leg that leaves playactivate.com for a third party's proxy, so
-            # a caller has to ask for them rather than get them by default.
-            if badge_cfg is not None and badge_cfg.enabled:
+            # ---- 3. the proxy, for progress and stars ----
+            proxy_badges: dict[int, list[list[scraper.BadgeState]]] = {}
+            proxy_failed: dict[int, int] = {}
+            if proxy_on:
                 badge_lo, badge_hi = badge_cfg.spacing_seconds
                 first_badge = True
                 for player_id, handles in badge_order(conn, seen_players):
-                    per_handle: list[list[scraper.BadgeState]] = []
-                    failed = 0
+                    proxy_badges[player_id] = []
                     for handle in handles:
                         if not first_badge:
                             await asyncio.sleep(random.uniform(badge_lo, badge_hi))
                         first_badge = False
                         try:
-                            per_handle.append(
+                            proxy_badges[player_id].append(
                                 await fetch_badges_with_retry(
                                     handle,
                                     session=session,
                                     badge_cfg=badge_cfg,
-                                    timeout=poll_cfg.request_timeout_sec,
+                                    timeout=timeout,
                                 )
                             )
                         except Exception as e:
-                            # Badges come from a third party's proxy, so they are
-                            # the least reliable leg of the poll and must never
-                            # take the scores down — those are already committed.
-                            failed += 1
+                            # Somebody else's server: the least reliable leg of
+                            # the poll, and it must never take the scores down —
+                            # those are already committed.
+                            proxy_failed[player_id] = proxy_failed.get(player_id, 0) + 1
                             counters["badges_errors"] += 1
-                            log.warning(
-                                "badge fetch failed handle=%s err=%s", handle, e
-                            )
-                    # `not per_handle` also covers a player with no handles at
-                    # all, who would otherwise be "fetched" with an empty list.
-                    if failed or not per_handle:
-                        # A partial answer is not authoritative. `persist_badges`
-                        # writes `earned` from what it is handed, so persisting
-                        # one handle of a two-handle player would clear every
-                        # badge only the other profile holds — `combine_badges`
-                        # can only OR together what it was given. Last poll's
-                        # rows are older but true; these would be wrong, and the
-                        # page's "As of" column says which it is showing.
-                        if per_handle:
-                            counters["badges_skipped"] += 1
-                            log.warning(
-                                "badge write skipped player=%s: %d of %d handles failed",
-                                player_id, failed, len(handles),
-                            )
-                        continue
-                    try:
-                        got = persist_badges(
-                            conn, player_id, scraper.combine_badges(per_handle)
-                        )
-                    except Exception:
-                        counters["badges_errors"] += 1
-                        log.exception("badge persist failed player=%s", player_id)
-                        continue
-                    counters["badges_fetched"] += 1
-                    counters["badges_newly_earned"] += got["newly_earned"]
-                    counters["badges_retired"] += got["retired"]
+                            log.warning("badge proxy failed handle=%s err=%s", handle, e)
 
-            for location_id, loc in seen_locations.items():
-                if not loc["rooms"]:
-                    continue  # nothing to walk — the location page gave no rooms
+            for player_id in seen_players:
+                _write_badges(
+                    conn,
+                    player_id,
+                    site=site_badges.get(player_id, []),
+                    site_whole=not site_failed.get(player_id),
+                    proxy=proxy_badges.get(player_id, []),
+                    proxy_whole=proxy_on and not proxy_failed.get(player_id),
+                    proxy_on=proxy_on,
+                    counters=counters,
+                )
+
+            # ---- 4. the catalog ----
+            for location_id, info in locations.items():
+                if not info.rooms:
+                    continue  # nothing to walk — the location lists no rooms
                 if not force_catalog and not catalog_mod.needs_refresh(
                     conn,
                     location_id,
-                    level_count=loc["level_count"],
-                    score_changed=loc["changed"],
+                    expected_levels=info.coop_levels,
+                    score_changed=changed.get(location_id, False),
                 ):
                     continue
                 try:
                     got = await catalog_mod.refresh_location(
-                        conn,
-                        session,
-                        location_id=location_id,
-                        slug=loc["slug"],
-                        handle=loc["handle"],
-                        rooms=loc["rooms"],
-                        level_count=loc["level_count"],
-                        poll_cfg=poll_cfg,
+                        conn, session, info=info, poll_cfg=poll_cfg
                     )
                 except Exception:
                     # A catalog problem must never take the score poll down —
@@ -333,6 +374,78 @@ async def poll_all(
 
         log.info("poll_all done: %s", counters)
         return counters
+
+
+def _write_badges(
+    conn: sqlite3.Connection,
+    player_id: int,
+    *,
+    site: list[list[scraper.BadgeState]],
+    site_whole: bool,
+    proxy: list[list[scraper.BadgeState]],
+    proxy_whole: bool,
+    proxy_on: bool,
+    counters: dict[str, int],
+) -> None:
+    """Persist one player's badges from whichever sources answered in full.
+
+    A partial answer is never used. `combine_badges` can only OR together what
+    it was handed and `persist_badges` writes `earned` from that, so one handle
+    of a two-handle player — or one of a player's locations — would clear every
+    badge only the missing answer holds. Each source is therefore taken whole
+    or not at all; with neither whole, last poll's rows stand, older but true.
+
+    Retiring is stricter still, since it deletes. The proxy lists the entire
+    catalog, so its answer alone defines it; the site lists only the badges
+    attainable at the tracked locations, so it defines the catalog only when
+    the proxy isn't in play. Retiring on the site's answer while the proxy is
+    merely down tonight would delete every badge no tracked location offers —
+    Row By Row, say, earned at a Climb room elsewhere.
+    """
+    use_site = site_whole and bool(site)
+    use_proxy = proxy_whole and bool(proxy)
+    if not use_site and not use_proxy:
+        if site or proxy:
+            counters["badges_skipped"] += 1
+            log.warning("badge write skipped player=%s: no source answered in full", player_id)
+        return
+
+    lists = (site if use_site else []) + (proxy if use_proxy else [])
+    try:
+        got = persist_badges(
+            conn,
+            player_id,
+            scraper.combine_badges(lists),
+            retire=use_proxy or (use_site and not proxy_on),
+        )
+    except Exception:
+        counters["badges_errors"] += 1
+        log.exception("badge persist failed player=%s", player_id)
+        return
+    counters["badges_fetched"] += 1
+    counters["badges_newly_earned"] += got["newly_earned"]
+    counters["badges_retired"] += got["retired"]
+
+
+def persist_location_badges(
+    conn: sqlite3.Connection, location_id: int, badge_ids: Iterable[int]
+) -> None:
+    """Replace one location's offer with what the site just listed.
+
+    Called only with ids from answers that arrived whole, and every whole
+    answer is the location's entire offer — the list doesn't vary by who asks —
+    so a location none of tonight's answers covered keeps last night's rows
+    instead of being emptied.
+    """
+    ids = sorted(set(badge_ids))
+    if not ids:
+        return
+    with transaction(conn):
+        conn.execute("DELETE FROM location_badges WHERE location_id = ?", (location_id,))
+        conn.executemany(
+            "INSERT INTO location_badges (location_id, badge_id) VALUES (?, ?)",
+            [(location_id, b) for b in ids],
+        )
 
 
 def persist_snapshot(
@@ -379,10 +492,10 @@ def persist_snapshot(
                 polled_at,
                 result.total_score,
                 result.yearly_score,
-                # Two different numbers, both per location: the page-header
-                # badge rank, and the leaderboard position the page states
-                # outright ("Your Leaderboard Position: #138"). The dashboard
-                # shows the second; the first is kept because it has history.
+                # Two different numbers, both per location: the page's "RANK"
+                # (totalScore // 25000), and the "PLAYER POSITION" it states
+                # outright. The dashboard shows the second; the first is kept
+                # because it has history.
                 result.location_player_rank,
                 result.standing,
                 result.yearly_rank,
@@ -415,11 +528,17 @@ def persist_badges(
     states: list[scraper.BadgeState],
     *,
     now: datetime | None = None,
+    retire: bool = True,
 ) -> dict[str, int]:
     """Upsert one player's badges. Returns counts for logging.
 
-    The badge API restates the whole catalog every call, so `badges` is
-    refreshed from it rather than fetched separately.
+    Both sources restate everything they know on every call, so `badges` is
+    refreshed from them rather than fetched separately.
+
+    A None progress or star value is the site saying nothing, not zero, and is
+    never written over a number the proxy gave earlier: `progress_at` records
+    when the proxy last spoke, and those columns keep its last word until it
+    speaks again.
 
     `earned_on` is stamped only on an observed false→true transition, and dated
     `streak.activity_day` — the same one-day backdate the visit rows get, for the
@@ -455,7 +574,7 @@ def persist_badges(
                 ON CONFLICT(badge_id) DO UPDATE SET
                     name        = excluded.name,
                     description = excluded.description,
-                    stars       = excluded.stars,
+                    stars       = COALESCE(excluded.stars, badges.stars),
                     last_seen   = excluded.last_seen
                 """,
                 (s.badge_id, s.name, s.description, s.stars, updated_at, updated_at),
@@ -476,14 +595,16 @@ def persist_badges(
                 """
                 INSERT INTO player_badges
                     (player_id, badge_id, earned, progress, total_progress,
-                     earned_on, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                     earned_on, updated_at, progress_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(player_id, badge_id) DO UPDATE SET
                     earned         = excluded.earned,
-                    progress       = excluded.progress,
-                    total_progress = excluded.total_progress,
+                    progress       = COALESCE(excluded.progress, player_badges.progress),
+                    total_progress = COALESCE(excluded.total_progress,
+                                              player_badges.total_progress),
                     earned_on      = excluded.earned_on,
-                    updated_at     = excluded.updated_at
+                    updated_at     = excluded.updated_at,
+                    progress_at    = COALESCE(excluded.progress_at, player_badges.progress_at)
                 """,
                 (
                     player_id,
@@ -493,10 +614,11 @@ def persist_badges(
                     s.total_progress,
                     earned_on,
                     updated_at,
+                    updated_at if s.progress is not None else None,
                 ),
             )
 
-        retired = _retire_badges(conn, player_id, prior, states)
+        retired = _retire_badges(conn, player_id, prior, states) if retire else 0
 
     return {"badges": len(states), "newly_earned": newly_earned, "retired": retired}
 
@@ -507,18 +629,18 @@ def _retire_badges(
     prior: dict[int, sqlite3.Row],
     states: list[scraper.BadgeState],
 ) -> int:
-    """Drop rows for badges the API no longer lists. Returns how many.
+    """Drop rows for badges no source lists any more. Returns how many.
 
     `badges` is a mirror of upstream, and upstream does retire badges — three
-    went in the move to activate-scores.ca (Go For Gold, Recollection, Sniper
-    Shot 1.0). Upserting alone would leave every existing player counted out of
-    the old 118 while a newly added one was counted out of 115, which is a
-    denominator that depends on when you joined.
+    went in the proxy's move to activate-scores.ca (Go For Gold, Recollection,
+    Sniper Shot 1.0), and Mascot after. Upserting alone would leave every
+    existing player counted out of the old total while a newly added one was
+    counted out of the new, which is a denominator that depends on when you
+    joined.
 
-    Safe only because the caller has already established the payload is whole:
-    `poll_all` skips the write entirely unless every one of a player's handles
-    answered, so a list short by a failed handle never reaches here and cannot
-    delete a badge the other profile still holds.
+    Safe only because the caller has already established the payload defines
+    the whole catalog — see `_write_badges`, which passes `retire=False` for
+    anything less, so a short list never reads as "upstream dropped these".
     """
     stale = sorted(set(prior) - {s.badge_id for s in states})
     if not stale:

@@ -1,10 +1,11 @@
 """Per-location game catalog: rooms, the gamemodes in each, and the location's
 top score per level.
 
-Kept apart from the score poll because it is player-independent. The location
-page we already poll carries every player's per-level scores, so one catalog
-refresh serves every tracked player at that location — the extra HTTP traffic
-is one request per *room*, not per player.
+Kept apart from the score poll because it is player-independent. The player's
+own per-level scores come with their location data, so one catalog refresh
+serves every tracked player at that location. The gamemodes arrive whole in
+the location's /games, which the poll reads anyway for its level count; what
+a refresh adds is one /highscores request per *room*, not per player.
 """
 from __future__ import annotations
 
@@ -30,15 +31,16 @@ def needs_refresh(
     conn: sqlite3.Connection,
     location_id: int,
     *,
-    level_count: int | None,
+    expected_levels: int | None,
     score_changed: bool,
 ) -> bool:
     """Whether this location's catalog should be re-fetched on this poll.
 
     Deliberately conservative about *when*, since a refresh costs one request
-    per room. A location whose catalog stays short of `level_count` — one room
-    that keeps failing, say — retries on every poll, which is the self-healing
-    behaviour we want at a daily cadence.
+    per room. `expected_levels` is the co-op level total the location's /games
+    lists; a catalog that stays short of it — one room that keeps failing, say
+    — retries on every poll, which is the self-healing behaviour we want at a
+    daily cadence.
     """
     row = conn.execute(
         "SELECT level_count, catalog_levels FROM location_catalog WHERE location_id = ?",
@@ -48,7 +50,7 @@ def needs_refresh(
         return True  # never catalogued
     if score_changed:
         return True  # someone played here: scores moved, top scores may have too
-    if level_count is not None and row["catalog_levels"] != level_count:
+    if expected_levels is not None and row["catalog_levels"] != expected_levels:
         return True  # upstream added or removed a room / gamemode
     return False
 
@@ -57,32 +59,36 @@ async def refresh_location(
     conn: sqlite3.Connection,
     session: AsyncSession,
     *,
-    location_id: int,
-    slug: str,
-    handle: str,
-    rooms: Iterable[dict[str, Any]],
-    level_count: int | None,
+    info: scraper.LocationInfo,
     poll_cfg: PollConfig,
 ) -> dict[str, int]:
-    """Re-read every room at this location and rewrite its catalog rows.
+    """Re-read every room's top scores at this location and rewrite its rows.
 
-    Applied room by room rather than as one all-or-nothing swap: a single room
-    that fails to fetch leaves its previous rows intact instead of blanking the
-    location. Rooms that have disappeared from `location.rooms` are pruned.
+    Applied room by room rather than as one all-or-nothing swap: a room whose
+    top scores fail to fetch keeps its previous rows — gamemodes included —
+    instead of blanking, and the short count it leaves is what makes
+    `needs_refresh` try again. Rooms that have disappeared from the location's
+    /rooms are pruned.
     """
-    # location.rooms carries no ordering field; its own order is the site's.
-    rooms = [{**r, "order": i} for i, r in enumerate(rooms)]
+    location_id = info.location_id
+    # /rooms carries no ordering field; its own order is the site's.
+    rooms = [{**r, "order": i} for i, r in enumerate(info.rooms)]
     counters = {"rooms": 0, "errors": 0}
     jitter_lo, jitter_hi = poll_cfg.jitter_seconds
 
     for room in rooms:
+        games = info.games_in(room["id"])
+        if not games:
+            # Nothing co-op to hold a top score, so nothing to ask for — but a
+            # room that *used* to run some must still lose them.
+            _store_room(conn, location_id, room, games, {})
+            counters["rooms"] += 1
+            continue
         await asyncio.sleep(random.uniform(jitter_lo, jitter_hi))
         try:
-            scraped = await scraper.fetch_room(
-                handle,
+            top_scores = await scraper.fetch_room_top_scores(
                 location_id,
-                slug,
-                room["name"],
+                room["id"],
                 session=session,
                 timeout=poll_cfg.request_timeout_sec,
             )
@@ -103,18 +109,18 @@ async def refresh_location(
             )
             continue
 
-        _store_room(conn, location_id, room, scraped)
+        _store_room(conn, location_id, room, games, top_scores)
         counters["rooms"] += 1
 
     _prune_missing_rooms(conn, location_id, [r["id"] for r in rooms])
-    catalog_levels = _record_status(conn, location_id, level_count)
+    catalog_levels = _record_status(conn, location_id, info.coop_levels)
 
-    if level_count is not None and catalog_levels != level_count:
-        # The site's own levelCount is the check on our room walk. A mismatch
-        # means a room or gamemode moved and we haven't captured it.
+    if catalog_levels != info.coop_levels:
+        # /games is the check on our room walk. A mismatch means a room's
+        # refresh failed and its rows are stale or missing.
         log.warning(
-            "catalog incomplete location=%s catalogued=%s levelCount=%s",
-            location_id, catalog_levels, level_count,
+            "catalog incomplete location=%s catalogued=%s expected=%s",
+            location_id, catalog_levels, info.coop_levels,
         )
     log.info("catalog refresh location=%s %s", location_id, counters)
     return counters
@@ -124,10 +130,13 @@ def _store_room(
     conn: sqlite3.Connection,
     location_id: int,
     room: dict[str, Any],
-    scraped: scraper.RoomScrape,
+    games: Iterable[scraper.RoomGame],
+    top_scores: dict[tuple[int, int], int],
 ) -> None:
     room_id = room["id"]
     room_order = room.get("order", 0)
+    games = list(games)
+    game_ids = {g.game_id for g in games}
 
     with transaction(conn):
         # Top scores are keyed by game, not room, so clear the union of the
@@ -140,7 +149,7 @@ def _store_room(
                 (location_id, room_id),
             ).fetchall()
         }
-        stale_games.update(g.game_id for g in scraped.games)
+        stale_games.update(game_ids)
         if stale_games:
             placeholders = ",".join("?" * len(stale_games))
             conn.execute(
@@ -163,16 +172,19 @@ def _store_room(
                 (
                     location_id,
                     room_id,
-                    scraped.room_name,
+                    room["name"],
                     room_order,
                     g.game_id,
                     g.name,
                     g.order,
                     json.dumps(list(g.levels)),
                 )
-                for g in scraped.games
+                for g in games
             ],
         )
+        # Only the catalogued gamemodes' scores: anything else in the response
+        # belongs to a game the catalog doesn't list, and nothing would ever
+        # clear it again.
         conn.executemany(
             """
             INSERT INTO location_top_scores (location_id, game_id, level_id, top_score)
@@ -180,7 +192,8 @@ def _store_room(
             """,
             [
                 (location_id, game_id, level_id, score)
-                for (game_id, level_id), score in sorted(scraped.top_scores.items())
+                for (game_id, level_id), score in sorted(top_scores.items())
+                if game_id in game_ids
             ],
         )
 
@@ -215,7 +228,7 @@ def _prune_missing_rooms(
 
 
 def _record_status(
-    conn: sqlite3.Connection, location_id: int, level_count: int | None
+    conn: sqlite3.Connection, location_id: int, expected_levels: int | None
 ) -> int:
     """Recount levels from the table itself so a partial refresh is recorded
     honestly, then upsert the location's catalog status. Returns the count."""
@@ -241,7 +254,7 @@ def _record_status(
             """,
             (
                 location_id,
-                level_count,
+                expected_levels,
                 catalog_levels,
                 datetime.now(timezone.utc).isoformat(timespec="seconds"),
             ),

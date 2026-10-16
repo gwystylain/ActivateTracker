@@ -31,15 +31,15 @@ def _seed_player(conn, handle="gmebagholder") -> int:
     return pid
 
 
-def _snap(conn, pid, loc, polled_at, *, position, beat, count=470, total=1000):
-    """`position` is playerLocation.standing — the page's "Your Leaderboard
-    Position", not the playerRank badge (which the dashboard doesn't show)."""
+def _snap(conn, pid, loc, polled_at, *, position, beat, count=470, total=1000, coins=None):
+    """`position` is playerLocation.standing — the page's "PLAYER POSITION",
+    not its "RANK" (playerRank, which the dashboard doesn't show)."""
     conn.execute(
         "INSERT INTO score_snapshots (player_id, location_id, polled_at, total_score,"
-        " yearly_score, leaderboard_position, levels_beat, level_count,"
+        " yearly_score, leaderboard_position, levels_beat, level_count, coins,"
         " raw_scores_json)"
-        " VALUES (?, ?, ?, ?, 0, ?, ?, ?, '[]')",
-        (pid, loc, polled_at, total, position, beat, count),
+        " VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, '[]')",
+        (pid, loc, polled_at, total, position, beat, count, coins),
     )
 
 
@@ -676,6 +676,31 @@ def test_summary_badge_column_is_none_when_never_polled(tmp_path):
     assert (row["badges_earned"], row["badges_possible"]) == (None, None)
 
 
+def test_summary_coins_are_the_player_s_newest_figure_shown_once(tmp_path):
+    """Coins belong to the account: every location's snapshot from one poll
+    carries the same number. The newest anywhere is the answer, and the
+    per-location rows don't repeat it."""
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _snap(conn, pid, 72, "2026-08-01T00:00:00", position=321, beat=40, coins=489)
+    _snap(conn, pid, 38, "2026-08-01T00:00:05", position=138, beat=25, coins=489)
+    _snap(conn, pid, 38, "2026-08-02T00:00:05", position=130, beat=26, coins=718)
+
+    row = _build_player_summaries(conn, today=TODAY)[0]
+    assert row["coins"] == 718
+    assert all("coins" not in loc for loc in row["locations"])
+
+
+def test_summary_coins_are_none_when_never_observed(tmp_path):
+    """No snapshot, or only ones from before coins were read: a dash, not 0."""
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    assert _build_player_summaries(conn, today=TODAY)[0]["coins"] is None
+
+    _snap(conn, pid, 72, "2026-08-01T00:00:00", position=321, beat=40)
+    assert _build_player_summaries(conn, today=TODAY)[0]["coins"] is None
+
+
 async def test_badge_data_carries_the_community_detail(tmp_path):
     """Merged at the API boundary like the gamemode rules on /games, and keyed
     on name *and* description, so the two Untouchable 5.0 badges keep their own
@@ -802,3 +827,110 @@ async def test_badge_data_says_where_each_badge_can_be_done_and_adds_location_fa
 
     assert [l["name"] for l in payload["locations"]] == ["Coquitlam", "Langley"]
     assert payload["locations"][1]["rooms"] == ["Hide", "Pipes"]
+
+
+# ---------- badges: the site's own per-location lists ----------
+
+def _offer(conn, location_id, *badge_ids):
+    conn.executemany(
+        "INSERT INTO location_badges (location_id, badge_id) VALUES (?, ?)",
+        [(location_id, b) for b in badge_ids],
+    )
+
+
+def _named_badges(conn, pid, *specs):
+    """(badge_id, name, description, earned) — real names, so the community
+    detail (rooms) resolves the way it does live."""
+    for bid, name, desc, earned in specs:
+        conn.execute(
+            "INSERT INTO badges (badge_id, name, description, stars, first_seen,"
+            " last_seen) VALUES (?, ?, ?, 5, '2026-08-01', '2026-08-01')",
+            (bid, name, desc),
+        )
+        conn.execute(
+            "INSERT INTO player_badges (player_id, badge_id, earned, progress,"
+            " total_progress, updated_at) VALUES (?, ?, ?, 0, 1, '2026-08-03')",
+            (pid, bid, 1 if earned else 0),
+        )
+
+
+async def test_where_follows_the_site_s_list_for_a_location(tmp_path):
+    """Langley's list settles what the catalog can't: the photo room is in no
+    catalog, and a roomless badge has no room to look for. Coquitlam has no
+    list stored, so it keeps the inference."""
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _named_badges(
+        conn, pid,
+        (76, "Photobomb", "Take a photo in the photo room", False),
+        (104, "Night Owl", "Win a game after 11 PM", True),
+        (63, "Row By Row", "Complete Technique level 7 by only using one row at a time.", True),
+    )
+    conn.executemany(
+        "INSERT INTO location_games (location_id, room_id, room_name, room_order,"
+        " game_id, game_name, game_order, levels_json) VALUES (?, 13, 'Hide', 0, 1305,"
+        " 'Sequence', 0, '[0]')",
+        [(72,), (38,)],
+    )
+    _offer(conn, 72, 76, 104)
+
+    by_id = {b["badge_id"]: b for b in (await _badges(conn))["badges"]}
+
+    assert by_id[76]["where"]["72"] == {"status": "yes", "why": None}
+    assert by_id[76]["where"]["38"]["status"] == "unknown"      # inference only
+    assert by_id[104]["where"] == {"72": {"status": "yes", "why": None}}
+    # Off Langley's list; the inference agrees, so its reason is the one given.
+    assert by_id[63]["where"]["72"] == {"status": "no", "why": "no Climb room"}
+
+
+async def test_a_location_with_a_list_but_no_catalog_is_still_answered_for(tmp_path):
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _named_badges(conn, pid, (104, "Night Owl", "Win a game after 11 PM", False))
+    _offer(conn, 72, 104)
+
+    payload = await _badges(conn)
+    assert [(l["name"], l["rooms"]) for l in payload["locations"]] == [("Langley", [])]
+    assert payload["badges"][0]["where"] == {"72": {"status": "yes", "why": None}}
+
+
+async def test_the_tally_is_checked_against_the_same_badges_it_counts(tmp_path):
+    """trophyProgress counts what its location offers. Row By Row was earned at
+    a Climb room neither location has, so the whole count runs one ahead of the
+    tally without either being wrong — the like-for-like count doesn't."""
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _named_badges(
+        conn, pid,
+        (104, "Night Owl", "Win a game after 11 PM", True),
+        (23, "Fast Feet", "Complete Bop level 7", True),
+        (76, "Photobomb", "Take a photo in the photo room", False),
+        (63, "Row By Row", "Complete Technique level 7 by only using one row at a time.", True),
+    )
+    _offer(conn, 38, 104, 23, 76)
+    conn.execute(
+        "INSERT INTO score_snapshots (player_id, location_id, polled_at, total_score,"
+        " yearly_score, badges_earned, badges_possible, raw_scores_json)"
+        " VALUES (?, 38, '2026-08-03T00:00:00', 1, 0, 2, 3, '[]')",
+        (pid,),
+    )
+
+    p = (await _badges(conn))["players"][0]
+    assert (p["earned"], p["reported_earned"]) == (3, 2)
+    assert p["earned_in_scope"] == 2
+    assert p["reported_location"] == "Coquitlam"
+
+
+async def test_without_the_location_s_list_there_is_nothing_narrower_to_compare(tmp_path):
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _named_badges(conn, pid, (104, "Night Owl", "Win a game after 11 PM", True))
+    conn.execute(
+        "INSERT INTO score_snapshots (player_id, location_id, polled_at, total_score,"
+        " yearly_score, badges_earned, badges_possible, raw_scores_json)"
+        " VALUES (?, 38, '2026-08-03T00:00:00', 1, 0, 1, 101, '[]')",
+        (pid,),
+    )
+
+    p = (await _badges(conn))["players"][0]
+    assert p["earned_in_scope"] is None

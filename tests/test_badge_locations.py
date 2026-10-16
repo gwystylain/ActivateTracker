@@ -1,4 +1,4 @@
-from app.badge_locations import availability, facts
+from app.badge_locations import NOT_OFFERED, availability, facts
 from app.badge_reference import lookup
 
 TEN = list(range(10))
@@ -91,6 +91,52 @@ def test_the_two_untouchable_5_0s_are_in_different_buildings():
     assert availability(piperooni, COQUITLAM)["status"] == "no"
     assert availability(wormholes, COQUITLAM)["status"] == "yes"
     assert availability(wormholes, LANGLEY)["status"] == "no"
+
+
+# ---------- availability from the site's own list ----------
+
+def _listed(badge_id, name, description=None):
+    return {"badge_id": badge_id, **_badge(name, description)}
+
+
+def test_the_site_s_list_settles_what_the_catalog_cannot_see():
+    """The photo room is in no catalog, so inference stops at "unknown". The
+    location's own badge list just says."""
+    photobomb = _listed(76, "Photobomb")
+    assert availability(photobomb, LANGLEY, {76}) == {"status": "yes", "why": None}
+    assert availability(photobomb, LANGLEY, {1})["status"] == "no"
+
+
+def test_the_site_s_yes_beats_the_inference_s_no():
+    """The master document can be wrong, or a room renamed; the offer can't."""
+    fast_feet = _listed(23, "Fast Feet")
+    assert availability(fast_feet, COQUITLAM)["status"] == "no"
+    assert availability(fast_feet, COQUITLAM, {23}) == {"status": "yes", "why": None}
+
+
+def test_a_no_keeps_the_inference_s_reason_when_they_agree():
+    got = availability(_listed(23, "Fast Feet"), COQUITLAM, {1, 2})
+    assert got == {"status": "no", "why": "no Control room"}
+
+
+def test_a_no_the_inference_did_not_see_coming_says_so_plainly():
+    got = availability(_listed(23, "Fast Feet"), LANGLEY, {1, 2})
+    assert got == {"status": "no", "why": NOT_OFFERED}
+
+
+def test_with_the_list_a_roomless_badge_gets_an_answer_too():
+    """Inference can't place a badge with no room; the list places every badge."""
+    night_owl = _listed(104, "Night Owl")
+    assert availability(night_owl, LANGLEY) is None
+    assert availability(night_owl, LANGLEY, {104})["status"] == "yes"
+    assert availability(night_owl, LANGLEY, set())["status"] == "no"
+
+
+def test_the_list_answers_without_a_catalog():
+    """A location whose room walk hasn't landed still has its offer."""
+    assert availability(_listed(23, "Fast Feet"), [], {23})["status"] == "yes"
+    assert availability(_listed(23, "Fast Feet"), [], {1}) == {"status": "no", "why": NOT_OFFERED}
+    assert availability(_listed(23, "Fast Feet"), []) is None
 
 
 # ---------- facts ----------

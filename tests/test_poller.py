@@ -6,7 +6,7 @@ from app import db as db_mod
 from app import poller as poller_mod
 from app.config import BadgeConfig, PollConfig
 from app.poller import format_handles, parse_handles, persist_snapshot
-from app.scraper import BadgeState, RateLimited, ScrapeResult
+from app.scraper import BadgeState, LocationInfo, RateLimited, RoomGame, ScrapeResult
 
 
 def _conn(tmp_path):
@@ -31,7 +31,6 @@ def _result(total: int) -> ScrapeResult:
     return ScrapeResult(
         handle="gmebagholder",
         location_id=72,
-        location_slug="langley",
         player_name="GMEbagholder",
         profile_rank=3,
         stars=355,
@@ -56,8 +55,8 @@ def test_snapshot_persists_rank_and_levels_beat(tmp_path):
         "SELECT player_rank, leaderboard_position, levels_beat, level_count"
         " FROM score_snapshots"
     ).fetchone()
-    assert row["player_rank"] == 6              # the page-header badge rank
-    assert row["leaderboard_position"] == 287   # "Your Leaderboard Position"
+    assert row["player_rank"] == 6              # the page's "RANK"
+    assert row["leaderboard_position"] == 287   # its "PLAYER POSITION"
     assert row["levels_beat"] == 1
     assert row["level_count"] == 470
 
@@ -146,7 +145,7 @@ def test_visits_isolated_per_location(tmp_path):
 
     # Establish baselines at both locations.
     persist_snapshot(conn, pid, _result(100))
-    coquitlam = ScrapeResult(**{**_result(200).__dict__, "location_id": 38, "location_slug": "coquitlam"})
+    coquitlam = ScrapeResult(**{**_result(200).__dict__, "location_id": 38})
     persist_snapshot(conn, pid, coquitlam)
 
     # Increase only langley.
@@ -181,38 +180,67 @@ class _FakeSession:
         return False
 
 
-def _wire_poll(monkeypatch, totals):
+def _location(location_id):
+    return LocationInfo(
+        location_id=location_id,
+        rooms=ROOMS,
+        games=(RoomGame(1001, "Simon Says", tuple(range(10)), 0, room_id=10),),
+        level_count=13,
+    )
+
+
+def _wire_poll(monkeypatch, totals, *, site_badges=None):
     """Stub the network. `totals` maps handle -> total_score to report.
 
-    Returns the list of locations refresh_location was called for, so a test
-    can assert on how many refreshes one poll actually triggered.
-    """
-    refreshed = []
+    `site_badges(handle, location_id)` answers the site's own badge list; by
+    default every handle holds badge 1 and not badge 2.
 
-    async def fake_fetch(handle, location_id, slug, *, session, timeout):
+    Returns a dict of call logs, so a test can assert on how many requests and
+    refreshes one poll actually made.
+    """
+    calls = {"refreshed": [], "profiles": [], "scores": [], "site_badges": [], "locations": []}
+
+    async def fake_location(location_id, *, session, timeout):
+        calls["locations"].append(location_id)
+        return _location(location_id)
+
+    async def fake_profile(handle, *, session, timeout):
+        calls["profiles"].append(handle)
+        return {"playerName": handle, "rank": 3, "stars": 355, "coins": 145}
+
+    async def fake_fetch(handle, location_id, *, session, timeout, profile, level_count):
+        calls["scores"].append((handle, location_id))
         return ScrapeResult(**{
             **_result(totals[handle]).__dict__,
             "handle": handle,
             "location_id": location_id,
-            "location_slug": slug,
-            "rooms": ROOMS,
-            "level_count": 10,
+            "coins": profile["coins"],
+            "level_count": level_count,
         })
 
-    async def fake_refresh(conn, session, *, location_id, **kw):
-        refreshed.append(location_id)
+    async def fake_site_badges(handle, location_id, *, session, timeout):
+        calls["site_badges"].append((handle, location_id))
+        if site_badges is not None:
+            return site_badges(handle, location_id)
+        return _states((1, True), (2, False), progress=False)
+
+    async def fake_refresh(conn, session, *, info, poll_cfg):
+        calls["refreshed"].append(info.location_id)
         conn.execute(
             "INSERT INTO location_catalog (location_id, level_count, catalog_levels,"
             " fetched_at) VALUES (?, 10, 10, '2026-08-01T00:00:00+00:00')"
             " ON CONFLICT(location_id) DO UPDATE SET catalog_levels = 10",
-            (location_id,),
+            (info.location_id,),
         )
         return {"rooms": 1, "errors": 0}
 
+    monkeypatch.setattr(poller_mod.scraper, "fetch_location", fake_location)
+    monkeypatch.setattr(poller_mod.scraper, "fetch_profile", fake_profile)
     monkeypatch.setattr(poller_mod.scraper, "fetch", fake_fetch)
+    monkeypatch.setattr(poller_mod.scraper, "fetch_player_badges", fake_site_badges)
     monkeypatch.setattr(poller_mod.catalog_mod, "refresh_location", fake_refresh)
     monkeypatch.setattr(poller_mod, "AsyncSession", _FakeSession)
-    return refreshed
+    return calls
 
 
 async def test_poll_refreshes_a_location_once_not_once_per_player(tmp_path, monkeypatch):
@@ -226,19 +254,20 @@ async def test_poll_refreshes_a_location_once_not_once_per_player(tmp_path, monk
             " VALUES (?, 72, 'langley')",
             (pid,),
         )
-    refreshed = _wire_poll(monkeypatch, {"gmebagholder": 100, "kavo": 200})
+    calls = _wire_poll(monkeypatch, {"gmebagholder": 100, "kavo": 200})
 
     counters = await poller_mod.poll_all(conn, PollConfig(jitter_seconds=(0.0, 0.0)))
 
     assert counters["polled"] == 2
-    assert refreshed == [72]                     # one walk, not two
+    assert calls["locations"] == [72]            # one location read, not two
+    assert calls["refreshed"] == [72]            # one walk, not two
     assert counters["catalog_locations"] == 1
 
 
 async def test_poll_skips_the_catalog_when_no_score_moved(tmp_path, monkeypatch):
     conn = _conn(tmp_path)
     _insert_player(conn)
-    refreshed = _wire_poll(monkeypatch, {"gmebagholder": 100})
+    refreshed = _wire_poll(monkeypatch, {"gmebagholder": 100})["refreshed"]
     cfg = PollConfig(jitter_seconds=(0.0, 0.0))
 
     await poller_mod.poll_all(conn, cfg)          # bootstraps the catalog
@@ -254,7 +283,7 @@ async def test_force_catalog_rewalks_even_when_nothing_moved(tmp_path, monkeypat
     defeatable by hand."""
     conn = _conn(tmp_path)
     _insert_player(conn)
-    refreshed = _wire_poll(monkeypatch, {"gmebagholder": 100})
+    refreshed = _wire_poll(monkeypatch, {"gmebagholder": 100})["refreshed"]
     cfg = PollConfig(jitter_seconds=(0.0, 0.0))
 
     await poller_mod.poll_all(conn, cfg)
@@ -269,7 +298,7 @@ async def test_poll_refreshes_the_catalog_when_a_score_moved(tmp_path, monkeypat
     conn = _conn(tmp_path)
     _insert_player(conn)
     totals = {"gmebagholder": 100}
-    refreshed = _wire_poll(monkeypatch, totals)
+    refreshed = _wire_poll(monkeypatch, totals)["refreshed"]
     cfg = PollConfig(jitter_seconds=(0.0, 0.0))
 
     await poller_mod.poll_all(conn, cfg)
@@ -296,6 +325,72 @@ async def test_catalog_failure_does_not_fail_the_score_poll(tmp_path, monkeypatc
     assert conn.execute("SELECT count(*) AS n FROM score_snapshots").fetchone()["n"] == 1
 
 
+async def test_a_location_that_fails_to_load_still_polls_its_scores(tmp_path, monkeypatch):
+    """The location's /rooms and /games feed only the level count and the
+    catalog. Losing them costs those two, never the scores."""
+    conn = _conn(tmp_path)
+    _insert_player(conn)
+    calls = _wire_poll(monkeypatch, {"gmebagholder": 100})
+
+    async def boom(location_id, *, session, timeout):
+        raise poller_mod.scraper.FetchError("HTTP 503")
+
+    monkeypatch.setattr(poller_mod.scraper, "fetch_location", boom)
+    counters = await poller_mod.poll_all(conn, PollConfig(jitter_seconds=(0.0, 0.0)))
+
+    assert counters["location_errors"] == 1
+    assert counters["snapshots"] == 1
+    assert calls["refreshed"] == []               # no rooms known, nothing to walk
+    row = conn.execute("SELECT level_count FROM score_snapshots").fetchone()
+    assert row["level_count"] is None             # unknown, not zero
+
+
+async def test_the_profile_is_read_once_per_handle_not_once_per_location(tmp_path, monkeypatch):
+    """Stars, coins and profile rank belong to the account, so a player at two
+    locations costs one profile request, while scores and the site's badge
+    list are asked of each location."""
+    conn = _conn(tmp_path)
+    pid = _insert_player(conn)
+    conn.execute(
+        "INSERT INTO player_locations (player_id, location_id, slug)"
+        " VALUES (?, 38, 'coquitlam')",
+        (pid,),
+    )
+    calls = _wire_poll(monkeypatch, {"gmebagholder": 100})
+
+    await poller_mod.poll_all(conn, PollConfig(jitter_seconds=(0.0, 0.0)))
+
+    assert calls["profiles"] == ["gmebagholder"]
+    assert calls["scores"] == [("gmebagholder", 38), ("gmebagholder", 72)]
+    assert calls["site_badges"] == [("gmebagholder", 38), ("gmebagholder", 72)]
+    coins = {r[0] for r in conn.execute("SELECT coins FROM score_snapshots")}
+    assert coins == {145}
+
+
+async def test_an_unknown_handle_is_counted_per_location_but_asked_once(tmp_path, monkeypatch):
+    conn = _conn(tmp_path)
+    pid = _insert_player(conn)
+    conn.execute(
+        "INSERT INTO player_locations (player_id, location_id, slug)"
+        " VALUES (?, 38, 'coquitlam')",
+        (pid,),
+    )
+    calls = _wire_poll(monkeypatch, {"gmebagholder": 100})
+    asked = []
+
+    async def not_found(handle, *, session, timeout):
+        asked.append(handle)
+        raise poller_mod.scraper.FetchError("HTTP 404")
+
+    monkeypatch.setattr(poller_mod.scraper, "fetch_profile", not_found)
+    counters = await poller_mod.poll_all(conn, PollConfig(jitter_seconds=(0.0, 0.0)))
+
+    assert asked == ["gmebagholder"]              # a 404 isn't asked again
+    assert counters["errors"] == 2                # but both locations went unpolled
+    assert calls["scores"] == []
+    assert counters["snapshots"] == 0
+
+
 def test_cascade_delete_removes_snapshots_and_visits(tmp_path):
     conn = _conn(tmp_path)
     pid = _insert_player(conn)
@@ -313,20 +408,33 @@ def test_cascade_delete_removes_snapshots_and_visits(tmp_path):
 
 # ---------- badges ----------
 
-def _states(*specs):
-    """(id, earned) pairs -> BadgeState list, with a 0/25 progress target."""
+def _states(*specs, progress=True):
+    """(id, earned) pairs -> BadgeState list.
+
+    With `progress`, the proxy's shape: a 0/25 target and a star value. Without,
+    the site's, which says earned or not and nothing else.
+    """
     return [
         BadgeState(
             badge_id=bid,
             name=f"Badge {bid}",
             description=f"do thing {bid}",
             earned=earned,
-            progress=25 if earned else 4,
-            total_progress=25,
-            stars=5,
+            progress=(25 if earned else 4) if progress else None,
+            total_progress=25 if progress else None,
+            stars=5 if progress else None,
         )
         for bid, earned in specs
     ]
+
+
+def _earned(conn, pid=None):
+    sql = "SELECT badge_id, earned FROM player_badges"
+    args = ()
+    if pid is not None:
+        sql += " WHERE player_id = ?"
+        args = (pid,)
+    return dict(conn.execute(sql, args).fetchall())
 
 
 def test_a_first_poll_records_badges_without_inventing_a_date(tmp_path):
@@ -359,7 +467,7 @@ def test_earning_a_badge_dates_it_the_day_before_the_poll(tmp_path):
     )
 
     got = poller_mod.persist_badges(
-        conn, pid, _states((1, True)),
+        conn, pid, _states((1, True), progress=False),
         now=datetime(2026, 8, 11, 11, 0, tzinfo=timezone.utc),
     )
 
@@ -386,7 +494,7 @@ def test_a_later_poll_does_not_restamp_a_badge_already_earned(tmp_path):
     assert conn.execute("SELECT earned_on FROM player_badges").fetchone()[0] == "2026-08-10"
 
 
-def test_the_catalog_follows_whatever_the_api_last_said(tmp_path):
+def test_the_catalog_follows_whatever_the_sources_last_said(tmp_path):
     """The badge list is restated in full on every call, so `badges` is a mirror
     of upstream rather than something we accumulate."""
     conn = _conn(tmp_path)
@@ -402,14 +510,64 @@ def test_the_catalog_follows_whatever_the_api_last_said(tmp_path):
     assert (row["name"], row["description"], row["stars"]) == ("Renamed", "new wording", 10)
 
 
+def test_the_site_s_silence_never_erases_the_proxy_s_numbers(tmp_path):
+    """The site says earned or not and nothing else. Its None is "doesn't say",
+    so last night's progress, target and star value all stand — and
+    `progress_at` keeps saying when they were last true."""
+    conn = _conn(tmp_path)
+    pid = _insert_player(conn)
+    poller_mod.persist_badges(
+        conn, pid, _states((2, False)),
+        now=datetime(2026, 8, 10, 11, 0, tzinfo=timezone.utc),
+    )
+
+    poller_mod.persist_badges(
+        conn, pid, _states((2, False), progress=False),
+        now=datetime(2026, 8, 11, 11, 0, tzinfo=timezone.utc),
+    )
+
+    row = conn.execute(
+        "SELECT progress, total_progress, updated_at, progress_at FROM player_badges"
+    ).fetchone()
+    assert (row["progress"], row["total_progress"]) == (4, 25)
+    assert row["updated_at"].startswith("2026-08-11")     # earned state is fresh
+    assert row["progress_at"].startswith("2026-08-10")    # progress is not
+    assert conn.execute("SELECT stars FROM badges").fetchone()[0] == 5
+
+
+def test_progress_at_is_backfilled_for_rows_that_came_from_the_proxy(tmp_path):
+    """Before the site had a badge list every row was the proxy's, so its
+    progress is exactly as old as the row."""
+    conn = db_mod.connect(tmp_path / "old.db")
+    conn.executescript(
+        """
+        CREATE TABLE player_badges (
+            player_id      INTEGER NOT NULL,
+            badge_id       INTEGER NOT NULL,
+            earned         INTEGER NOT NULL DEFAULT 0,
+            progress       INTEGER,
+            total_progress INTEGER,
+            earned_on      TEXT,
+            updated_at     TEXT NOT NULL,
+            PRIMARY KEY (player_id, badge_id)
+        );
+        INSERT INTO player_badges VALUES (1, 7, 0, 4, 25, NULL, '2026-10-05T18:00:10+00:00');
+        """
+    )
+    db_mod.init_schema(conn)
+
+    row = conn.execute("SELECT progress, progress_at FROM player_badges").fetchone()
+    assert (row["progress"], row["progress_at"]) == (4, "2026-10-05T18:00:10+00:00")
+
+
 def test_snapshot_carries_the_page_s_own_badge_tally(tmp_path):
     conn = _conn(tmp_path)
     pid = _insert_player(conn)
     result = ScrapeResult(**{
         **_result(500).__dict__,
         "trophy_progress": {
-            "bronze": {"progress": 0.44, "requiredBadges": 25},
-            "platinum": {"progress": 0.09, "requiredBadges": 118},
+            "bronze": {"completedBadges": 32, "requiredBadges": 25, "progress": 1, "earned": True},
+            "platinum": {"completedBadges": 32, "requiredBadges": 101, "progress": 0.32},
         },
     })
 
@@ -418,7 +576,7 @@ def test_snapshot_carries_the_page_s_own_badge_tally(tmp_path):
     row = conn.execute(
         "SELECT badges_earned, badges_possible FROM score_snapshots"
     ).fetchone()
-    assert (row["badges_earned"], row["badges_possible"]) == (11, 118)
+    assert (row["badges_earned"], row["badges_possible"]) == (32, 101)
 
 
 def test_a_page_without_trophy_progress_leaves_the_tally_null(tmp_path):
@@ -432,9 +590,59 @@ def test_a_page_without_trophy_progress_leaves_the_tally_null(tmp_path):
     assert (row["badges_earned"], row["badges_possible"]) == (None, None)
 
 
-async def test_badges_are_fetched_once_per_handle_not_once_per_location(tmp_path, monkeypatch):
-    """The badge endpoint takes only a handle. A player at two locations must
-    not cost two identical badge requests."""
+# ---------- badges from a poll ----------
+
+def _proxy(monkeypatch, answer):
+    """Stub the proxy. `answer(handle)` returns states or raises."""
+    asked = []
+
+    async def fake_badges(handle, *, session, base, timeout):
+        asked.append(handle)
+        return answer(handle)
+
+    monkeypatch.setattr(poller_mod.scraper, "fetch_badges", fake_badges)
+    return asked
+
+
+def _two_handles(conn):
+    pid = conn.execute(
+        "INSERT INTO players (handle) VALUES (?)", ("gmebagholder, kavo",)
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO player_locations (player_id, location_id, slug)"
+        " VALUES (?, 72, 'langley')",
+        (pid,),
+    )
+    return pid
+
+
+async def test_the_site_s_badges_land_with_no_proxy_at_all(tmp_path, monkeypatch):
+    """Earned badges come from playactivate.com itself, so they no longer wait
+    on a third party — and with no badge config the poll never leaves it."""
+    conn = _conn(tmp_path)
+    pid = _insert_player(conn)
+    _wire_poll(monkeypatch, {"gmebagholder": 100})
+
+    def refuse(handle):
+        raise AssertionError("the proxy must not be asked without a config")
+
+    _proxy(monkeypatch, refuse)
+
+    counters = await poller_mod.poll_all(conn, PollConfig(jitter_seconds=(0.0, 0.0)))
+
+    assert counters["badges_fetched"] == 1
+    assert counters["badges_errors"] == 0
+    assert _earned(conn, pid) == {1: 1, 2: 0}
+
+    await poller_mod.poll_all(
+        conn, PollConfig(jitter_seconds=(0.0, 0.0)),
+        badge_cfg=BadgeConfig(enabled=False),
+    )
+
+
+async def test_the_proxy_is_asked_once_per_handle_not_once_per_location(tmp_path, monkeypatch):
+    """The proxy takes only a handle. A player at two locations must not cost
+    two identical requests to somebody else's server."""
     conn = _conn(tmp_path)
     pid = _insert_player(conn)
     conn.execute(
@@ -443,66 +651,252 @@ async def test_badges_are_fetched_once_per_handle_not_once_per_location(tmp_path
         (pid,),
     )
     _wire_poll(monkeypatch, {"gmebagholder": 100})
-    asked = []
-
-    async def fake_badges(handle, *, session, base, timeout):
-        asked.append(handle)
-        return _states((1, True), (2, False))
-
-    monkeypatch.setattr(poller_mod.scraper, "fetch_badges", fake_badges)
+    asked = _proxy(monkeypatch, lambda h: _states((1, True), (2, False)))
 
     counters = await poller_mod.poll_all(
         conn, PollConfig(jitter_seconds=(0.0, 0.0)), badge_cfg=BadgeConfig()
     )
 
-    assert asked == ["gmebagholder"]          # two locations, one badge fetch
+    assert asked == ["gmebagholder"]          # two locations, one proxy fetch
     assert counters["polled"] == 2            # but both locations still scored
     assert counters["badges_fetched"] == 1
     assert conn.execute("SELECT COUNT(*) FROM player_badges").fetchone()[0] == 2
 
 
-async def test_a_badge_failure_does_not_fail_the_score_poll(tmp_path, monkeypatch):
-    """Badges come from a third party's proxy — the least reliable leg of the
-    poll, and the one the scores must not depend on."""
+async def test_the_proxy_adds_progress_and_the_badges_no_location_offers(tmp_path, monkeypatch):
+    """Row By Row needs a room neither tracked location has. The site never
+    lists it; the proxy does, earned."""
     conn = _conn(tmp_path)
-    _insert_player(conn)
+    pid = _insert_player(conn)
+    _wire_poll(monkeypatch, {"gmebagholder": 100})
+    _proxy(monkeypatch, lambda h: _states((1, True), (2, False), (63, True)))
+
+    await poller_mod.poll_all(
+        conn, PollConfig(jitter_seconds=(0.0, 0.0)), badge_cfg=_badge_cfg()
+    )
+
+    assert _earned(conn, pid) == {1: 1, 2: 0, 63: 1}
+    row = conn.execute(
+        "SELECT progress, total_progress FROM player_badges WHERE badge_id = 2"
+    ).fetchone()
+    assert (row["progress"], row["total_progress"]) == (4, 25)
+
+
+async def test_a_proxy_failure_does_not_fail_the_score_poll(tmp_path, monkeypatch):
+    """The proxy is somebody else's server — the least reliable leg of the
+    poll, and the one neither the scores nor earned badges depend on."""
+    conn = _conn(tmp_path)
+    pid = _insert_player(conn)
     _wire_poll(monkeypatch, {"gmebagholder": 100})
 
-    async def boom(handle, *, session, base, timeout):
+    def boom(handle):
         raise RuntimeError("proxy down")
 
-    monkeypatch.setattr(poller_mod.scraper, "fetch_badges", boom)
+    _proxy(monkeypatch, boom)
 
     counters = await poller_mod.poll_all(
         conn, PollConfig(jitter_seconds=(0.0, 0.0)), badge_cfg=BadgeConfig()
     )
 
     assert counters["badges_errors"] == 1
-    assert counters["badges_fetched"] == 0
-    assert counters["polled"] == 1            # scores landed anyway
-    assert conn.execute("SELECT COUNT(*) FROM score_snapshots").fetchone()[0] == 1
+    assert counters["badges_fetched"] == 1    # the site's answer still landed
+    assert counters["polled"] == 1            # and so did the scores
+    assert _earned(conn, pid) == {1: 1, 2: 0}
 
 
-async def test_badges_are_skipped_without_a_config(tmp_path, monkeypatch):
-    """Opt-in: the one leg that leaves playactivate.com is never taken by
-    default, so a caller can't reach a third party by omission."""
+async def test_a_night_without_the_proxy_retires_nothing(tmp_path, monkeypatch):
+    """The site lists only what the tracked locations offer. Taking that as the
+    whole catalog while the proxy is merely down would delete every badge only
+    the proxy reports — Row By Row, earned elsewhere."""
     conn = _conn(tmp_path)
-    _insert_player(conn)
+    pid = _insert_player(conn)
+    poller_mod.persist_badges(conn, pid, _states((1, False), (2, False), (63, True)))
     _wire_poll(monkeypatch, {"gmebagholder": 100})
 
-    async def boom(handle, **kw):
-        raise AssertionError("badges must not be fetched without a config")
+    def boom(handle):
+        raise RuntimeError("proxy down")
 
-    monkeypatch.setattr(poller_mod.scraper, "fetch_badges", boom)
+    _proxy(monkeypatch, boom)
 
-    counters = await poller_mod.poll_all(conn, PollConfig(jitter_seconds=(0.0, 0.0)))
-    assert counters["badges_fetched"] == 0
-    assert counters["badges_errors"] == 0
+    counters = await poller_mod.poll_all(
+        conn, PollConfig(jitter_seconds=(0.0, 0.0)), badge_cfg=BadgeConfig()
+    )
 
-    await poller_mod.poll_all(
+    assert counters["badges_retired"] == 0
+    assert _earned(conn, pid) == {1: 1, 2: 0, 63: 1}   # badge 1 updated, 63 kept
+
+
+async def test_with_the_proxy_switched_off_the_site_defines_the_catalog(tmp_path, monkeypatch):
+    """Turned off, not down: then nothing else will ever speak for a badge the
+    tracked locations don't offer, and the denominator is theirs."""
+    conn = _conn(tmp_path)
+    pid = _insert_player(conn)
+    poller_mod.persist_badges(conn, pid, _states((1, True), (2, False), (63, True)))
+    _wire_poll(monkeypatch, {"gmebagholder": 100})
+
+    counters = await poller_mod.poll_all(
         conn, PollConfig(jitter_seconds=(0.0, 0.0)),
         badge_cfg=BadgeConfig(enabled=False),
     )
+
+    assert counters["badges_retired"] == 1
+    assert _earned(conn, pid) == {1: 1, 2: 0}
+
+
+async def test_a_location_the_site_fails_on_falls_back_to_the_proxy(tmp_path, monkeypatch):
+    """Half the site's answer is not an answer. The proxy's whole one is, and it
+    alone is enough to write — and retire — from."""
+    conn = _conn(tmp_path)
+    pid = _insert_player(conn)
+    conn.execute(
+        "INSERT INTO player_locations (player_id, location_id, slug)"
+        " VALUES (?, 38, 'coquitlam')",
+        (pid,),
+    )
+    poller_mod.persist_badges(conn, pid, _states((1, True), (2, False), (50, True)))
+
+    def site(handle, location_id):
+        if location_id == 38:
+            raise poller_mod.scraper.FetchError("HTTP 502")
+        return _states((1, True), (2, False), progress=False)
+
+    _wire_poll(monkeypatch, {"gmebagholder": 100}, site_badges=site)
+    _proxy(monkeypatch, lambda h: _states((1, True), (2, True)))
+
+    counters = await poller_mod.poll_all(
+        conn, PollConfig(jitter_seconds=(0.0, 0.0)), badge_cfg=_badge_cfg()
+    )
+
+    assert _earned(conn, pid) == {1: 1, 2: 1}         # the proxy's word, 50 retired
+    assert counters["badges_retired"] == 1
+    assert counters["badges_errors"] == 1
+
+
+async def test_one_handle_failing_does_not_wipe_the_others_badges(tmp_path, monkeypatch):
+    """`combine_badges` can only OR together what it was handed, and
+    `persist_badges` writes `earned` from that. So persisting one handle of a
+    two-handle player would clear every badge only the other profile holds -
+    last poll's rows are older but true, these would be wrong. With both
+    sources short a handle, nothing is written and nothing is retired."""
+    conn = _conn(tmp_path)
+    pid = _two_handles(conn)
+    # Last night, when both handles answered: badges 2 and 50 are kavo's.
+    poller_mod.persist_badges(conn, pid, _states((1, True), (2, True), (50, True)))
+
+    def site(handle, location_id):
+        if handle == "kavo":
+            raise poller_mod.scraper.FetchError("HTTP 502")
+        return _states((1, True), (2, False), progress=False)
+
+    def proxy(handle):
+        if handle == "kavo":
+            raise RateLimited("HTTP 429", retry_after=None)
+        return _states((1, True), (2, False))
+
+    _wire_poll(monkeypatch, {"gmebagholder": 100, "kavo": 200}, site_badges=site)
+    _no_sleep(monkeypatch)
+    _proxy(monkeypatch, proxy)
+
+    counters = await poller_mod.poll_all(
+        conn,
+        PollConfig(jitter_seconds=(0.0, 0.0)),
+        badge_cfg=_badge_cfg(max_retries=0),
+    )
+
+    assert _earned(conn, pid) == {1: 1, 2: 1, 50: 1}   # kavo's badges survive
+    assert counters["badges_skipped"] == 1
+    assert counters["badges_fetched"] == 0             # nothing was written at all
+    assert counters["badges_retired"] == 0
+
+
+async def test_either_source_whole_is_enough_for_a_two_handle_player(tmp_path, monkeypatch):
+    """The site answered for both handles; the proxy only for one. The site's
+    answer is whole, so it is written — the proxy's half is not mixed in."""
+    conn = _conn(tmp_path)
+    pid = _two_handles(conn)
+
+    def site(handle, location_id):
+        return _states((1, True), (2, handle == "kavo"), progress=False)
+
+    def proxy(handle):
+        if handle == "kavo":
+            raise RateLimited("HTTP 429", retry_after=None)
+        return _states((1, True), (2, False), (3, False))
+
+    _wire_poll(monkeypatch, {"gmebagholder": 100, "kavo": 200}, site_badges=site)
+    _no_sleep(monkeypatch)
+    _proxy(monkeypatch, proxy)
+
+    counters = await poller_mod.poll_all(
+        conn,
+        PollConfig(jitter_seconds=(0.0, 0.0)),
+        badge_cfg=_badge_cfg(max_retries=0),
+    )
+
+    assert _earned(conn, pid) == {1: 1, 2: 1}          # no badge 3: half an answer
+    assert counters["badges_fetched"] == 1
+
+
+# ---------- each location's offer ----------
+
+def _offer(conn, location_id):
+    return {
+        r[0] for r in conn.execute(
+            "SELECT badge_id FROM location_badges WHERE location_id = ?", (location_id,)
+        )
+    }
+
+
+async def test_each_location_s_offer_is_kept_from_the_lists_the_poll_already_read(
+    tmp_path, monkeypatch
+):
+    """No extra requests: the player's badge list at a location *is* that
+    location's offer, earned flags aside."""
+    conn = _conn(tmp_path)
+    pid = _insert_player(conn)
+    conn.execute(
+        "INSERT INTO player_locations (player_id, location_id, slug)"
+        " VALUES (?, 38, 'coquitlam')",
+        (pid,),
+    )
+
+    def site(handle, location_id):
+        extra = (125,) if location_id == 38 else (111,)
+        return _states((1, True), (2, False), *((b, False) for b in extra), progress=False)
+
+    calls = _wire_poll(monkeypatch, {"gmebagholder": 100}, site_badges=site)
+    await poller_mod.poll_all(conn, PollConfig(jitter_seconds=(0.0, 0.0)))
+
+    assert len(calls["site_badges"]) == 2
+    assert _offer(conn, 38) == {1, 2, 125}
+    assert _offer(conn, 72) == {1, 2, 111}
+
+
+async def test_one_whole_answer_defines_a_location_and_none_leaves_it_alone(
+    tmp_path, monkeypatch
+):
+    """The list is the same whoever asks, so one handle that answered is enough
+    — unlike a player's earned set, where a missing handle is a missing half.
+    A location nobody answered for keeps last night's rows."""
+    conn = _conn(tmp_path)
+    _two_handles(conn)
+    poller_mod.persist_location_badges(conn, 72, [9])
+
+    def kavo_fails(handle, location_id):
+        if handle == "kavo":
+            raise poller_mod.scraper.FetchError("HTTP 502")
+        return _states((1, True), (2, False), progress=False)
+
+    _wire_poll(monkeypatch, {"gmebagholder": 100, "kavo": 200}, site_badges=kavo_fails)
+    await poller_mod.poll_all(conn, PollConfig(jitter_seconds=(0.0, 0.0)))
+    assert _offer(conn, 72) == {1, 2}            # replaced, not merged with 9
+
+    def all_fail(handle, location_id):
+        raise poller_mod.scraper.FetchError("HTTP 502")
+
+    _wire_poll(monkeypatch, {"gmebagholder": 100, "kavo": 200}, site_badges=all_fail)
+    await poller_mod.poll_all(conn, PollConfig(jitter_seconds=(0.0, 0.0)))
+    assert _offer(conn, 72) == {1, 2}            # untouched
 
 
 # ---------- badges: the proxy's rate limit ----------
@@ -524,22 +918,23 @@ def _badge_cfg(**kw):
 
 
 async def test_a_rate_limited_badge_fetch_is_waited_out_not_lost(tmp_path, monkeypatch):
-    """The proxy lets five handles through and refuses the rest with an instant
-    429. Dropping those is what pinned the same players' badges ten days stale,
-    since the fetch order was stable and so the losers never changed."""
+    """The proxy once let five handles through and refused the rest with an
+    instant 429. Dropping those is what pinned the same players' badges ten
+    days stale, since the fetch order was stable and so the losers never
+    changed."""
     conn = _conn(tmp_path)
     _insert_player(conn)
     _wire_poll(monkeypatch, {"gmebagholder": 100})
     slept = _no_sleep(monkeypatch)
     attempts = []
 
-    async def fake_badges(handle, *, session, base, timeout):
+    def answer(handle):
         attempts.append(handle)
         if len(attempts) == 1:
             raise RateLimited("HTTP 429", retry_after=None)
-        return _states((1, True), (2, False))
+        return _states((1, True), (2, False), (3, False))
 
-    monkeypatch.setattr(poller_mod.scraper, "fetch_badges", fake_badges)
+    _proxy(monkeypatch, answer)
 
     counters = await poller_mod.poll_all(
         conn, PollConfig(jitter_seconds=(0.0, 0.0)), badge_cfg=_badge_cfg()
@@ -549,7 +944,8 @@ async def test_a_rate_limited_badge_fetch_is_waited_out_not_lost(tmp_path, monke
     assert counters["badges_fetched"] == 1
     assert counters["badges_errors"] == 0
     assert 5.0 in slept                       # the configured backoff, not a guess
-    assert conn.execute("SELECT COUNT(*) FROM player_badges").fetchone()[0] == 2
+    # Badge 3 is the proxy's alone, so its row is the proof the retry landed.
+    assert conn.execute("SELECT COUNT(*) FROM player_badges").fetchone()[0] == 3
 
 
 async def test_the_proxys_own_retry_after_beats_our_backoff(tmp_path, monkeypatch):
@@ -560,13 +956,13 @@ async def test_the_proxys_own_retry_after_beats_our_backoff(tmp_path, monkeypatc
     slept = _no_sleep(monkeypatch)
     attempts = []
 
-    async def fake_badges(handle, *, session, base, timeout):
+    def answer(handle):
         attempts.append(handle)
         if len(attempts) == 1:
             raise RateLimited("HTTP 429", retry_after=47.0)
         return _states((1, True))
 
-    monkeypatch.setattr(poller_mod.scraper, "fetch_badges", fake_badges)
+    _proxy(monkeypatch, answer)
 
     await poller_mod.poll_all(
         conn, PollConfig(jitter_seconds=(0.0, 0.0)), badge_cfg=_badge_cfg()
@@ -583,11 +979,11 @@ async def test_retries_are_bounded_and_the_failure_is_still_counted(tmp_path, mo
     _no_sleep(monkeypatch)
     attempts = []
 
-    async def fake_badges(handle, *, session, base, timeout):
+    def answer(handle):
         attempts.append(handle)
         raise RateLimited("HTTP 429", retry_after=None)
 
-    monkeypatch.setattr(poller_mod.scraper, "fetch_badges", fake_badges)
+    _proxy(monkeypatch, answer)
 
     counters = await poller_mod.poll_all(
         conn,
@@ -597,7 +993,6 @@ async def test_retries_are_bounded_and_the_failure_is_still_counted(tmp_path, mo
 
     assert len(attempts) == 3                 # the first try plus two retries
     assert counters["badges_errors"] == 1
-    assert counters["badges_fetched"] == 0
     assert counters["polled"] == 1            # scores landed anyway
 
 
@@ -611,11 +1006,11 @@ async def test_a_wait_longer_than_the_poll_can_afford_is_not_slept_off(tmp_path,
     slept = _no_sleep(monkeypatch)
     attempts = []
 
-    async def fake_badges(handle, *, session, base, timeout):
+    def answer(handle):
         attempts.append(handle)
         raise RateLimited("HTTP 429", retry_after=3600.0)
 
-    monkeypatch.setattr(poller_mod.scraper, "fetch_badges", fake_badges)
+    _proxy(monkeypatch, answer)
 
     counters = await poller_mod.poll_all(
         conn,
@@ -637,11 +1032,11 @@ async def test_only_a_429_is_retried(tmp_path, monkeypatch):
     _no_sleep(monkeypatch)
     attempts = []
 
-    async def fake_badges(handle, *, session, base, timeout):
+    def answer(handle):
         attempts.append(handle)
         raise poller_mod.scraper.FetchError("HTTP 500")
 
-    monkeypatch.setattr(poller_mod.scraper, "fetch_badges", fake_badges)
+    _proxy(monkeypatch, answer)
 
     counters = await poller_mod.poll_all(
         conn, PollConfig(jitter_seconds=(0.0, 0.0)), badge_cfg=_badge_cfg()
@@ -649,47 +1044,6 @@ async def test_only_a_429_is_retried(tmp_path, monkeypatch):
 
     assert len(attempts) == 1
     assert counters["badges_errors"] == 1
-
-
-async def test_one_handle_failing_does_not_wipe_the_others_badges(tmp_path, monkeypatch):
-    """`combine_badges` can only OR together what it was handed, and
-    `persist_badges` writes `earned` from that. So persisting one handle of a
-    two-handle player would clear every badge only the other profile holds -
-    last poll's rows are older but true, these would be wrong."""
-    conn = _conn(tmp_path)
-    pid = conn.execute(
-        "INSERT INTO players (handle) VALUES (?)", ("gmebagholder, kavo",)
-    ).lastrowid
-    conn.execute(
-        "INSERT INTO player_locations (player_id, location_id, slug)"
-        " VALUES (?, 72, 'langley')",
-        (pid,),
-    )
-    # Last night, when both handles answered: badge 2 is kavo's.
-    poller_mod.persist_badges(conn, pid, _states((1, True), (2, True)))
-
-    _wire_poll(monkeypatch, {"gmebagholder": 100, "kavo": 200})
-    _no_sleep(monkeypatch)
-
-    async def fake_badges(handle, *, session, base, timeout):
-        if handle == "kavo":
-            raise RateLimited("HTTP 429", retry_after=None)
-        return _states((1, True), (2, False))
-
-    monkeypatch.setattr(poller_mod.scraper, "fetch_badges", fake_badges)
-
-    counters = await poller_mod.poll_all(
-        conn,
-        PollConfig(jitter_seconds=(0.0, 0.0)),
-        badge_cfg=_badge_cfg(max_retries=0),
-    )
-
-    earned = dict(
-        conn.execute("SELECT badge_id, earned FROM player_badges").fetchall()
-    )
-    assert earned == {1: 1, 2: 1}             # kavo's badge survives the poll
-    assert counters["badges_skipped"] == 1
-    assert counters["badges_fetched"] == 0    # nothing was written at all
 
 
 def test_the_stalest_player_goes_first_so_the_same_ones_cannot_starve(tmp_path):
@@ -709,6 +1063,13 @@ def test_the_stalest_player_goes_first_so_the_same_ones_cannot_starve(tmp_path):
         conn, stale, _states((1, True)),
         now=datetime(2026, 8, 11, 11, 0, tzinfo=timezone.utc),
     )
+    # The site refreshes everyone's earned state nightly. That must not make a
+    # player look fresh to the proxy: their progress is still as old as it was.
+    for pid in (stale, never):
+        poller_mod.persist_badges(
+            conn, pid, _states((1, True), progress=False),
+            now=datetime(2026, 8, 25, 11, 0, tzinfo=timezone.utc),
+        )
 
     seen = {fresh: ["fresh"], stale: ["stale"], never: ["never"]}
     assert [pid for pid, _ in poller_mod.badge_order(conn, seen)] == [never, stale, fresh]
@@ -717,9 +1078,9 @@ def test_the_stalest_player_goes_first_so_the_same_ones_cannot_starve(tmp_path):
 # ---------- badges: retiring what upstream dropped ----------
 
 def test_a_badge_upstream_no_longer_lists_is_dropped_not_left_behind(tmp_path):
-    """Three badges went in the move to activate-scores.ca. Upserting alone
-    would count an existing player out of the old 118 while a newly added one
-    was counted out of 115 - a denominator that depends on when you joined."""
+    """Three badges went in the proxy's move to activate-scores.ca. Upserting
+    alone would count an existing player out of the old 118 while a newly added
+    one was counted out of 115 - a denominator that depends on when you joined."""
     conn = _conn(tmp_path)
     pid = _insert_player(conn)
     poller_mod.persist_badges(conn, pid, _states((1, True), (50, True), (2, False)))
@@ -733,6 +1094,17 @@ def test_a_badge_upstream_no_longer_lists_is_dropped_not_left_behind(tmp_path):
     assert held == [1, 2]
     # The catalog mirrors upstream, so the row goes too.
     assert [r[0] for r in conn.execute("SELECT badge_id FROM badges ORDER BY badge_id")] == [1, 2]
+
+
+def test_an_answer_that_is_not_the_whole_catalog_retires_nothing(tmp_path):
+    conn = _conn(tmp_path)
+    pid = _insert_player(conn)
+    poller_mod.persist_badges(conn, pid, _states((1, True), (50, True)))
+
+    got = poller_mod.persist_badges(conn, pid, _states((1, True)), retire=False)
+
+    assert got["retired"] == 0
+    assert _earned(conn, pid) == {1: 1, 50: 1}
 
 
 def test_a_retired_badge_survives_while_another_player_still_holds_it(tmp_path):
@@ -756,40 +1128,3 @@ def test_a_retired_badge_survives_while_another_player_still_holds_it(tmp_path):
 
     poller_mod.persist_badges(conn, two, _states((1, True)))
     assert conn.execute("SELECT COUNT(*) FROM badges WHERE badge_id = 50").fetchone()[0] == 0
-
-
-async def test_a_skipped_write_retires_nothing(tmp_path, monkeypatch):
-    """A list short by a failed handle must not read as "upstream dropped these"
-    - that would delete badges the other profile still holds."""
-    conn = _conn(tmp_path)
-    pid = conn.execute(
-        "INSERT INTO players (handle) VALUES (?)", ("gmebagholder, kavo",)
-    ).lastrowid
-    conn.execute(
-        "INSERT INTO player_locations (player_id, location_id, slug)"
-        " VALUES (?, 72, 'langley')",
-        (pid,),
-    )
-    poller_mod.persist_badges(conn, pid, _states((1, True), (50, True)))
-
-    _wire_poll(monkeypatch, {"gmebagholder": 100, "kavo": 200})
-    _no_sleep(monkeypatch)
-
-    async def fake_badges(handle, *, session, base, timeout):
-        if handle == "kavo":
-            raise RateLimited("HTTP 429", retry_after=None)
-        return _states((1, True))          # short by kavo's badge 50
-
-    monkeypatch.setattr(poller_mod.scraper, "fetch_badges", fake_badges)
-
-    counters = await poller_mod.poll_all(
-        conn,
-        PollConfig(jitter_seconds=(0.0, 0.0)),
-        badge_cfg=_badge_cfg(max_retries=0),
-    )
-
-    assert counters["badges_retired"] == 0
-    assert counters["badges_skipped"] == 1
-    assert conn.execute(
-        "SELECT COUNT(*) FROM player_badges WHERE badge_id = 50"
-    ).fetchone()[0] == 1

@@ -58,14 +58,17 @@ class PollConfig(BaseModel):
 
 
 class BadgeConfig(BaseModel):
-    """Where to read per-player badges from.
+    """The badge proxy: where badge *progress* and star values come from.
 
-    The default is a community-run proxy in front of an official Activate badge
-    API — the score pages we scrape carry no badge list at all. It is somebody's
+    Which badges a player holds comes from playactivate.com itself, one list
+    per tracked location, on every poll whatever this says. That list stops at
+    earned or not, so this community-run proxy in front of an official Activate
+    badge API supplies the rest — how far along each unearned badge is, what
+    each is worth, and the badges no tracked location offers. It is somebody's
     personal server, so the base URL is configuration: pointing at the upstream
     directly, or at a mirror, should never need a code change. Setting
-    `enabled: false` skips the fetch entirely and leaves the dashboard's badge
-    count running off the page's own trophyProgress tally.
+    `enabled: false` skips it entirely; earned badges still update, while
+    progress and stars stay at whatever the proxy last said.
     """
 
     enabled: bool = True

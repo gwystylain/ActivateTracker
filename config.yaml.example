@@ -26,12 +26,13 @@ poll:
   user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 
 badges:
-  # Badges are not on the score pages the poller scrapes — the site only shows
-  # them on the in-store score-checker iPad. This is a community-run proxy in
-  # front of an official Activate badge API, public and keyed on the handle
-  # alone. It is somebody's personal server, so it is configuration: point it
-  # elsewhere if it moves, or set enabled: false to skip badges entirely (the
-  # dashboard's badge count then falls back to the score page's own tally).
+  # Which badges a player has earned comes from playactivate.com itself on
+  # every poll. Its list stops at earned-or-not, so this community-run proxy in
+  # front of an official Activate badge API adds the rest: progress towards each
+  # unearned badge, each badge's star value, and badges no tracked location
+  # offers. It is somebody's personal server, so it is configuration: point it
+  # elsewhere if it moves, or set enabled: false to skip it (earned badges keep
+  # updating; progress and stars freeze at whatever it last said).
   enabled: true
   # Moved here from api.ryflix.ca, which now answers 503. Same response shape;
   # the path is {api_base}/{handle}, and the request carries an Origin derived

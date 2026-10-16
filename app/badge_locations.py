@@ -1,9 +1,17 @@
 """Where a badge can be done, and what a location adds to its detail.
 
 Pure functions over one location's catalog — its `location_games` rows, as
-`{"room", "game_id", "name", "levels"}` dicts in the site's own order — and the
-levels each player has beaten there, so the rules are testable without a
-database. `public.badge_data` gathers both and hangs the answers on each badge.
+`{"room", "game_id", "name", "levels"}` dicts in the site's own order — the
+badges the site says it offers, and the levels each player has beaten there, so
+the rules are testable without a database. `public.badge_data` gathers them and
+hangs the answers on each badge.
+
+**The site's own list decides, where we have it.** Each location's badge list
+(`location_badges`) is Activate saying outright which badges that building
+offers, so a badge on it is a "yes" and one off it a "no", whatever the
+inference below would have said — roomless badges and photo-room badges
+included. The inference survives for a location polled before that list was
+stored, and as the *reason* for a "no" when it agrees.
 
 **Availability checks the gamemode, not just the room.** A badge names a room
 and, usually, a gamemode in it (`badge_reference`'s `games`). Rooms change what
@@ -37,13 +45,34 @@ Game = dict[str, Any]          # {"room", "game_id", "name", "levels"}
 Beaten = dict[int, set[tuple[int, int]]]   # player id -> {(game_id, level_id)}
 
 
-def availability(badge: dict[str, Any], games: list[Game]) -> dict[str, Any] | None:
+NOT_OFFERED = "Activate doesn't offer it there"
+
+
+def availability(
+    badge: dict[str, Any], games: list[Game], offer: set[int] | None = None
+) -> dict[str, Any] | None:
     """{"status": "yes" | "no" | "unknown", "why": str | None} at one location.
 
-    None for a badge with no room, which is location-independent. `why` is a
-    short clause for the page to put after the location's name, and is None
-    exactly when the answer is yes.
+    `offer` is the badge ids the site lists for the location, or None when we
+    don't have its list. With it, the answer is the site's: never "unknown",
+    and never None, since a roomless badge can be missing from a location's
+    list too. Without it, None for a badge with no room, which the inference
+    can't place. `why` is a short clause for the page to put after the
+    location's name, and is None exactly when the answer is yes.
     """
+    inferred = _inferred(badge, games) if games else None
+    if offer is None:
+        return inferred
+    if badge.get("badge_id") in offer:
+        return {"status": "yes", "why": None}
+    # The site's "no" is final, but says nothing about why. The inference's
+    # reason ("no Climb room") is worth keeping when it reached the same answer.
+    if inferred and inferred["status"] == "no":
+        return inferred
+    return {"status": "no", "why": NOT_OFFERED}
+
+
+def _inferred(badge: dict[str, Any], games: list[Game]) -> dict[str, Any] | None:
     rooms = tuple(badge.get("rooms") or ())
     if not rooms:
         return None

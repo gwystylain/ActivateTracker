@@ -5,10 +5,12 @@ player scores over time. Public landing page shows a graph plus per-player
 streak / discount / visit summary; password-protected admin section adds and
 removes tracked players.
 
-There is no public Activate API, so the app scrapes each player's per-location
-scores page on a daily schedule. A "visit" is inferred whenever a player's
-`totalScore` at any of their tracked locations increases between two
-consecutive snapshots.
+Activate publishes no documented API, but its scores page is filled in by the
+browser from JSON endpoints on playactivate.com itself, and the app reads those
+same endpoints on a daily schedule — scores, per-level bests, the location's
+games and top scores, and which badges each player has earned. A "visit" is
+inferred whenever a player's `totalScore` at any of their tracked locations
+increases between two consecutive snapshots.
 
 ## Quick start (Docker)
 
@@ -53,8 +55,10 @@ rebuilds.
      72,langley
      38,coquitlam
      ```
-     Find these in the player's scores page URL:
-     `https://playactivate.com/scores/<handle>/<id>/<slug>/scores`.
+     The id is the number in the player's scores page URL:
+     `https://playactivate.com/scores/<handle>/<id>/scores`. The slug is only
+     the name the dashboard shows for that location; the site no longer puts
+     one in the URL.
 
 A daily background poll fetches scores for every (player, location) at the time
 configured in `config.yaml` (default 11:00 UTC ≈ 04:00 Pacific). Use **Refresh
@@ -128,8 +132,8 @@ pytest
 ACTIVATETRACKER_DB=data/dev.db uvicorn app.main:app --reload
 ```
 
-The unit tests use a real captured page from playactivate.com as a fixture
-(`tests/fixtures/gmebagholder_langley.html`) — no live network access required.
+The unit tests use real captured responses from playactivate.com's endpoints
+as fixtures (`tests/fixtures/site/`) — no live network access required.
 
 ## Project layout
 
@@ -138,7 +142,7 @@ app/
 ├── main.py            FastAPI app + APScheduler lifespan
 ├── config.py          YAML loader (pydantic-validated)
 ├── db.py              SQLite connection + schema
-├── scraper.py         curl_cffi fetch + JSON-blob extractor
+├── scraper.py         curl_cffi fetch + parsers for the site's JSON endpoints
 ├── poller.py          poll_all() + visit detection
 ├── streak.py          pure streak/visit math
 ├── auth.py            bcrypt, signed sessions, login throttling

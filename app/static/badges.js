@@ -1,7 +1,7 @@
 // /badges — who holds which badges, and what each player is closest to earning.
 //
-// Badges are per player, not per location: the badge API is keyed on the handle
-// alone. What a location changes is whether a badge can be done there, and the
+// Badges are per player, not per location: they transfer between locations, and
+// the site's per-location lists agree on every badge two share. What a location changes is whether a badge can be done there, and the
 // server answers that for every tracked location up front (`where`, plus a few
 // location facts in `here`), so even the location filter re-reads data already
 // in hand and the page fetches exactly once.
@@ -382,12 +382,19 @@
     }
 
     // The score page's own trophyProgress tally, worked out independently of the
-    // badge API. Shown only when the two disagree — that means one of them is
-    // stale or wrong, and picking a winner silently would hide it.
+    // enumerated list. Shown only when the two disagree — that means one of them is
+    // stale or wrong, and picking a winner silently would hide it. The tally only
+    // counts the badges its location offers, so ours is narrowed to the same ones
+    // (`earned_in_scope`) when the server has that location's list: otherwise a
+    // badge earned at a room no tracked location has would read as a mismatch.
+    function ourCount(p) {
+        return p.earned_in_scope ?? p.earned;
+    }
+
     function crossCheckNote() {
         const off = data.players.filter(
             p => p.reported_earned !== null && p.reported_earned !== undefined
-                && p.reported_earned !== p.earned
+                && p.reported_earned !== ourCount(p)
         );
         const base = 'A trophy needs 25, 50 or 75 badges; platinum needs all of them, '
             + 'and how many that is depends on which rooms your locations have.';
@@ -397,7 +404,9 @@
             el('span', {
                 className: 'warn',
                 text: off.map(p =>
-                    p.display_name + ": this page counts " + p.earned
+                    p.display_name + ": this page counts " + ourCount(p)
+                    + (p.earned_in_scope != null && p.reported_location
+                        ? ' of the badges ' + p.reported_location + ' offers' : '')
                     + ", Activate's own score page says " + p.reported_earned
                 ).join('; ') + '.',
             }),
@@ -633,10 +642,10 @@
         return data.locations.find(l => String(l.location_id) === locationSel.value) || null;
     }
 
-    // Only a definite "no" hides a badge. `unknown` is a room the site never
-    // lists — the photo room, missing from every location whether or not the
-    // building has one — and a badge with no room has no answer at all, since
-    // it can be done anywhere.
+    // Only a definite "no" hides a badge. Where the server has a location's own
+    // badge list every answer is definite. Without it, `unknown` is a room the
+    // site never lists — the photo room, missing from every location whether or
+    // not the building has one — and a badge with no room has no answer at all.
     //
     // "Any of my locations" is the weaker claim, so it keeps the old rule that
     // a badge somebody holds is never hidden: badges transfer between
@@ -824,13 +833,17 @@
 
     function fillFacetFilters() {
         // At one location, only the rooms a badge can be done in there: rooms
-        // the location has, plus a room nobody can see (the photo room), which
-        // the location filter keeps too. Otherwise every room any badge names.
+        // the location has, plus a room the catalog can't see (the photo room,
+        // which isn't a scoring room) when the badge is still on offer there —
+        // vouched for by the site's own list, or at worst not ruled out.
+        // Otherwise every room any badge names.
         const loc = selectedLocation();
         const rooms = new Set();
         for (const b of data.badges) {
             if (loc && !passesLocation(b, locationSel.value)) continue;
-            const unseen = loc && ((b.where || {})[loc.location_id] || {}).status === 'unknown';
+            const status = loc && ((b.where || {})[loc.location_id] || {}).status;
+            const unseen = status === 'unknown' || (status === 'yes'
+                && !(b.rooms || []).some(r => loc.rooms.includes(r)));
             for (const r of b.rooms || []) {
                 if (!loc || unseen || loc.rooms.includes(r)) rooms.add(r);
             }

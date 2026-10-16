@@ -9,11 +9,11 @@ from app.tools import gen_badge_reference as gen
 
 BADGE_FIXTURE = Path(__file__).parent / "fixtures" / "badges_gmebagholder.json"
 
-# In the fixture, which predates their retirement, and in no source now: the
-# API stopped serving Mascot in October 2026 and the document moved it to its
-# notes on retired badges. Go For Gold, Recollection and Sniper Shot 1.0 left
-# the API too, but the document still describes them, so they still resolve.
-RETIRED_AND_UNDESCRIBED = {"Mascot"}
+# Live badges the reference data can't describe. Empty since the fixture was
+# re-captured in October 2026: its one entry was Mascot, which the API stopped
+# serving that month just as the document moved it to its notes on retired
+# badges. A badge Activate adds before the documents reach it lands here.
+RETIRED_AND_UNDESCRIBED: set[str] = set()
 
 # Rooms the community documents name. Superset of any one location: the
 # documents cover every room Activate has built anywhere.
@@ -50,7 +50,7 @@ def test_an_unambiguous_name_resolves_without_its_description():
 
 def test_names_are_matched_across_the_sources_own_spellings():
     """The API writes "Activ8" and "10 for 10"; the document writes "ACTIV8"
-    and "10 For 10". 117 of the 118 live badges only match once normalised."""
+    and "10 For 10". Almost every live badge only matches once normalised."""
     assert norm("ACTIV8") == norm("Activ8")
     assert lookup("Activ8")["difficulty"] == lookup("ACTIV8")["difficulty"]
     assert lookup("10 for 10")["difficulty"] is not None
