@@ -496,6 +496,25 @@ outright alongside the other detail, so expanding a badge is enough to spend tha
 is a deliberate call — the page exists to surface everything known about a badge — but
 it is the reason the detail is behind a click at all rather than sitting in the grid.
 
+### Discord tips are a hand-written layer over badge_reference
+`app/badge_tips.py` is the third source of badge detail, and the only one this repo writes:
+the useful core of the Activate Discord's #badges channel (8,540 messages, April 2024 to
+October 2026), kept to methods someone confirmed by earning the badge, staff rulings and
+measured figures, newest advice winning. `public._describe_badges` applies it on top of
+`badge_reference.lookup` with `badge_tips.overlay`, so it reaches the page and the Claude
+export alike. It lives outside the generated module on purpose: regenerating
+badge_reference can't lose it, and editing it doesn't need the generator's uncommitted
+inputs.
+
+Tuple fields (`tips`, `watch_out`) are **appended** after the documents' entries; scalar
+fields (`notes`, `giveaway`) **replace** them, and that is reserved for where the documents
+are now wrong — Thumb War's Link method (Link level 1 stopped costing lives in October
+2026), Riddle 4.0's answer (steps in the wrong order), ACTIV8's recommended games. Keyed by
+name through `badge_reference.norm`, and a test fails on any name the reference doesn't
+know. Untouchable 5.0 has no entry because the name is two badges. Tips that apply to a
+family (the visit-long badges, X for X, Deja Vu) are shared constants. When a document
+catches up with a tip here, delete the tip rather than letting the page say it twice.
+
 ### /badges by location: the site's list first, then the gamemode
 `app/badge_locations.py` answers, per badge and per tracked location, whether it can be
 done there (`where`) and any location-specific facts (`here`); `/api/badge-data` sends both

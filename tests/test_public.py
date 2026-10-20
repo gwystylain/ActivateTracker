@@ -995,3 +995,20 @@ async def test_export_of_players_nobody_tracks_is_a_404(tmp_path):
     conn = _conn(tmp_path)
     _named_badges(conn, _seed_player(conn), (104, "Night Owl", "x", False))
     assert (await _export(conn, players="999")).status_code == 404
+
+
+async def test_badge_data_carries_the_discord_tips_after_the_documents(tmp_path):
+    """badge_tips rides on top of badge_reference, in the payload the page
+    and the Claude export both read."""
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _named_badges(
+        conn, pid,
+        (90, "Thumb War", "Score exactly 1234 points in any one level", False),
+        (91, "Tiptoeing", "Complete Zones level 5 without stepping on any wrong colours", False),
+    )
+
+    by_name = {b["name"]: b for b in (await _badges(conn))["badges"]}
+
+    assert by_name["Thumb War"]["notes"].startswith("You must lose at least one life")
+    assert by_name["Tiptoeing"]["tips"][-1].startswith("After each wave stand still")

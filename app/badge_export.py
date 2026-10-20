@@ -65,8 +65,8 @@ condition, so one win can earn it for several of us. Someone who already holds \
 a badge can still play to make up the numbers.
 - "Requirement" is Activate's own wording and is the authority on what a badge \
 needs. Room, difficulty, player count, tips and answers come from community \
-documents, which can be wrong or out of date; "Players" is their best player \
-count, not a hard rule.
+documents and the players' Discord, which can be wrong or out of date; \
+"Players" is their best player count, not a hard rule.
 - Treat "in a row" as consecutive games played by the same person, so a game in \
 between — a loss included — breaks the streak unless it counts too.
 - Levels are numbered from 1, as the site shows them. A level listed as beaten \

@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
-from .. import badge_locations, badge_reference
+from .. import badge_locations, badge_reference, badge_tips
 from .. import badge_export as badge_export_mod
 from .. import catalog as catalog_mod
 from .. import master_document
@@ -448,10 +448,13 @@ def _describe_badges(badges: list[dict[str, Any]]) -> list[dict[str, Any]]:
     `_described` does it for gamemodes: it is static reference data keyed by
     name, not something Activate told us, so it has no business in a table that
     mirrors upstream. Looked up by name *and* description because the name alone
-    is ambiguous — "Untouchable 5.0" is two badges in two different rooms.
+    is ambiguous — "Untouchable 5.0" is two badges in two different rooms. The
+    players' Discord tips go on top (`badge_tips`).
     """
     for badge in badges:
-        detail = badge_reference.lookup(badge["name"], badge["description"])
+        detail = badge_tips.overlay(
+            badge["name"], badge_reference.lookup(badge["name"], badge["description"])
+        )
         badge.update({k: v for k, v in detail.items() if k != "name"})
     return badges
 
