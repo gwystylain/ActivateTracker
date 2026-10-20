@@ -66,6 +66,19 @@
     </fieldset>
 
     <p class="muted small" id="badgesStatus">Loading…</p>
+
+    <div class="export-row" id="exportRow" hidden>
+        <button type="button" id="exportCopy">Copy for Claude</button>
+        <a class="button-link" id="exportDownload" href="/badges/export.md" download="badge-plan.md">Download</a>
+        <span class="muted small" id="exportStatus" role="status"></span>
+    </div>
+    <p class="muted small" id="exportNote" hidden>
+        Everything the ticked players still lack at the chosen location &mdash;
+        every room and difficulty, whatever the other filters say &mdash; with
+        tips, answers and the levels each of you has beaten, under a brief asking
+        Claude for a route that stacks badges into as few games as it can. Paste it
+        into a chat with Claude.
+    </p>
 </section>
 
 <section class="card" id="farmerCard" hidden>

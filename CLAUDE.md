@@ -545,6 +545,23 @@ floor could become the full count if the catalog ever stores them). Per-player l
 location, intersected with the catalog so a count can't exceed its total, and the page
 skips them for a player who already holds the badge.
 
+### /badges export: a brief for Claude, not a data dump
+`GET /badges/export.md?players=<ids>&location=<id|tracked>` (the page's **Copy for Claude** and
+**Download**) is Markdown built by `app/badge_export.py`, a pure module over `_badge_payload`'s
+output — the same payload `/api/badge-data` sends, plus the per-location catalogs (`games`,
+`beaten`) the page itself never needs. It opens with a brief asking Claude for a route that
+stacks badges (one careful Zones 5 is Tiptoeing *and* one of 5 For 5's five), then every badge a
+ticked player lacks with Activate's wording and the community detail, then every gamemode at the
+location with each player's beaten levels as ranges — the evidence for "a level 5 we can win".
+
+It takes the players and the location from the page and **ignores room, difficulty and
+search**: stacking only shows up across rooms and grades, so a filtered export would miss what
+it exists for. "Any of my locations" differs from the page in one way — a badge no tracked
+location can host is dropped even if somebody holds it, since a route can't visit it. Copy tries
+`ClipboardItem` with a promise (Safari wants the write inside the click), then `writeText`, then
+`execCommand('copy')`, which is the only one that works over plain HTTP or where the clipboard
+permission is denied — the Claude desktop app's browser pane denies it.
+
 ### The description bubble is a pointer's shortcut, never the only way in
 A long press is the only gesture a touch screen has for the hover bubble, and it is the
 text-selection gesture too, so on a phone the bubble is a fight to summon and a fight to

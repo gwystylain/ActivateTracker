@@ -7,6 +7,7 @@ from app.routes.public import (
     _build_player_summaries,
     _build_records,
     badge_data,
+    badge_export,
     chart_data,
     game_data,
 )
@@ -934,3 +935,63 @@ async def test_without_the_location_s_list_there_is_nothing_narrower_to_compare(
 
     p = (await _badges(conn))["players"][0]
     assert p["earned_in_scope"] is None
+
+
+# ---------- /badges/export.md ----------
+
+async def _export(conn, players="", location=""):
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=conn)))
+    return await badge_export(request, players=players, location=location)
+
+
+async def test_export_covers_the_ticked_players_at_the_chosen_location(tmp_path):
+    """The page's player ticks and Location select carry over; a badge the
+    site's list rules out at that location doesn't, and the location's
+    gamemodes come with each player's beaten levels."""
+    conn = _conn(tmp_path)
+    aaron = _seed_player(conn, "aaron")
+    edward = _seed_player(conn, "gmebagholder")
+    _seed_player(conn, "landon")
+    _named_badges(
+        conn, aaron,
+        (104, "Night Owl", "Win a game after 11 PM", False),
+        (63, "Row By Row", "Complete Technique level 7 by only using one row at a time.", False),
+    )
+    for bid in (104, 63):
+        conn.execute(
+            "INSERT INTO player_badges (player_id, badge_id, earned, progress,"
+            " total_progress, updated_at) VALUES (?, ?, 0, 0, 1, '2026-08-03')",
+            (edward, bid),
+        )
+    _offer(conn, 38, 104)
+    _seed_catalog(conn, location_id=38)
+    _snap_scores(conn, edward, 38, "2026-08-02T00:00:00", [
+        {"gameId": 1003, "levelId": 0, "highScore": 2000},
+        {"gameId": 1003, "levelId": 1, "highScore": 3000},
+    ])
+
+    resp = await _export(conn, players=f"{aaron},{edward}", location="38")
+    text = resp.body.decode()
+
+    assert resp.media_type == "text/markdown; charset=utf-8"
+    assert text.startswith("# Activate badge plan — aaron and gmebagholder at Coquitlam\n")
+    assert "landon" not in text
+    assert "### Night Owl" in text
+    assert "Row By Row" not in text
+    assert "- **Barrage**, 3 levels, best with 2 — aaron no scores here; gmebagholder 1–2" in text
+
+
+async def test_export_without_players_covers_everyone(tmp_path):
+    conn = _conn(tmp_path)
+    for handle in ("aaron", "gmebagholder"):
+        _named_badges(conn, _seed_player(conn, handle), (104 if handle == "aaron" else 105,
+                      "Night Owl" if handle == "aaron" else "Early Bird", "x", False))
+
+    text = (await _export(conn)).body.decode()
+    assert text.startswith("# Activate badge plan — aaron and gmebagholder\n")
+
+
+async def test_export_of_players_nobody_tracks_is_a_404(tmp_path):
+    conn = _conn(tmp_path)
+    _named_badges(conn, _seed_player(conn), (104, "Night Owl", "x", False))
+    assert (await _export(conn, players="999")).status_code == 404

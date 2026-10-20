@@ -10,6 +10,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from .. import badge_locations, badge_reference
+from .. import badge_export as badge_export_mod
 from .. import catalog as catalog_mod
 from .. import master_document
 from .. import streak as streak_mod
@@ -193,8 +194,49 @@ async def badge_data(request: Request) -> JSONResponse:
     both are sent for every tracked location up front. ~120 badges times a
     handful of players is small enough to send whole and re-filter client-side.
     """
-    conn = request.app.state.db
+    payload, _ = _badge_payload(request.app.state.db)
+    return JSONResponse(payload)
 
+
+@router.get("/badges/export.md")
+async def badge_export(
+    request: Request, players: str = "", location: str = ""
+) -> PlainTextResponse:
+    """What the ticked players still lack, as Markdown to paste into Claude.
+
+    `players` is comma-separated ids, everyone when absent; `location` is the
+    page's Location filter value — an id, `tracked`, or empty for anywhere. The
+    page's other filters don't apply; `badge_export` says why.
+    """
+    conn = request.app.state.db
+    payload, locations = _badge_payload(conn)
+
+    wanted = {int(x) for x in players.split(",") if x.strip().isdigit()}
+    selected = [p for p in payload["players"] if not wanted or p["id"] in wanted]
+    if not selected:
+        return PlainTextResponse("No such players.\n", status_code=404)
+
+    choice: int | str | None = None
+    if location == badge_export_mod.TRACKED:
+        choice = badge_export_mod.TRACKED
+    elif location.isdigit():
+        choice = int(location)
+
+    text = badge_export_mod.build(
+        players=selected,
+        badges=payload["badges"],
+        states=payload["states"],
+        locations=locations,
+        choice=choice,
+        today=date.today(),
+    )
+    return PlainTextResponse(text, media_type="text/markdown; charset=utf-8")
+
+
+def _badge_payload(conn) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """/api/badge-data's payload, and the per-location catalogs it was built
+    from — the export needs those whole, gamemodes and beaten levels included,
+    where the page only needs each location's room names."""
     catalog = _describe_badges(
         [
             dict(r)
@@ -205,9 +247,7 @@ async def badge_data(request: Request) -> JSONResponse:
         ]
     )
     if not catalog:
-        return JSONResponse(
-            {"players": [], "badges": [], "states": {}, "locations": []}
-        )
+        return {"players": [], "badges": [], "states": {}, "locations": []}, []
 
     offers = _location_offers(conn)
     locations = _badge_locations(conn, offers)
@@ -283,22 +323,20 @@ async def badge_data(request: Request) -> JSONResponse:
             }
         )
 
-    return JSONResponse(
-        {
-            "players": players,
-            "badges": catalog,
-            "states": states,
-            "locations": [
-                {
-                    "location_id": loc["location_id"],
-                    "slug": loc["slug"],
-                    "name": loc["name"],
-                    "rooms": sorted({g["room"] for g in loc["games"]}),
-                }
-                for loc in locations
-            ],
-        }
-    )
+    return {
+        "players": players,
+        "badges": catalog,
+        "states": states,
+        "locations": [
+            {
+                "location_id": loc["location_id"],
+                "slug": loc["slug"],
+                "name": loc["name"],
+                "rooms": sorted({g["room"] for g in loc["games"]}),
+            }
+            for loc in locations
+        ],
+    }, locations
 
 
 @router.get("/api/game-data")

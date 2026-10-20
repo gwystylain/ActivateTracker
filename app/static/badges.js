@@ -27,6 +27,11 @@
     const gridCard = document.getElementById('gridCard');
     const gridHead = document.getElementById('gridHead');
     const gridBody = document.getElementById('gridBody');
+    const exportRow = document.getElementById('exportRow');
+    const exportNote = document.getElementById('exportNote');
+    const exportCopy = document.getElementById('exportCopy');
+    const exportLink = document.getElementById('exportDownload');
+    const exportStatus = document.getElementById('exportStatus');
 
     const fmt = new Intl.NumberFormat();
     const KEY = 'atrk.badges';
@@ -347,6 +352,7 @@
         renderClose();
         renderGrid();
         renderStatus();
+        renderExport();
     }
 
     function renderSummary() {
@@ -822,6 +828,96 @@
             + players.length + ' player' + (players.length === 1 ? '' : 's')
             + (loc ? ' at ' + loc.name : '') + '.';
     }
+
+    // ---------- export for Claude ----------
+    //
+    // Built server-side from the ticked players and the location alone. The
+    // room, difficulty and search filters narrow what is on screen, not what
+    // Claude plans from: stacking badges only shows up across rooms and grades
+    // (app/badge_export.py has the rest).
+
+    function exportUrl() {
+        const params = new URLSearchParams();
+        params.set('players', activePlayers().map(p => p.id).join(','));
+        if (locationSel.value) params.set('location', locationSel.value);
+        return '/badges/export.md?' + params;
+    }
+
+    function renderExport() {
+        const any = activePlayers().length > 0;
+        exportRow.hidden = !any;
+        exportNote.hidden = !any;
+        exportLink.href = exportUrl();
+        const loc = selectedLocation();
+        exportLink.setAttribute('download', 'badge-plan' + (loc ? '-' + loc.slug : '') + '.md');
+        // A "Copied" left over from before the selection changed would claim
+        // the clipboard holds what is selected now.
+        exportStatus.textContent = '';
+    }
+
+    async function fetchExport() {
+        const resp = await fetch(exportUrl(), { credentials: 'same-origin' });
+        if (!resp.ok) throw new Error('export ' + resp.status);
+        return resp.text();
+    }
+
+    // Safari lets a page write the clipboard only inside the click that asked,
+    // and the text isn't here until the fetch lands — so where it can, the
+    // write starts at once with the text still a promise. writeText after the
+    // fetch is the next try, which Chrome and Firefox both allow. Neither
+    // exists outside a secure context (the app over plain HTTP on the LAN),
+    // and a browser can deny both outright, so the last resort is the old
+    // execCommand route, which needs only the click. Failing all three,
+    // there is Download.
+    async function copyText(text) {
+        const clip = navigator.clipboard;
+        if (window.ClipboardItem && clip && clip.write) {
+            try {
+                await clip.write([new ClipboardItem({
+                    'text/plain': text.then(t => new Blob([t], { type: 'text/plain' })),
+                })]);
+                return;
+            } catch (e) { /* next */ }
+        }
+        const t = await text;
+        if (clip && clip.writeText) {
+            try {
+                await clip.writeText(t);
+                return;
+            } catch (e) { /* next */ }
+        }
+        if (!legacyCopy(t)) throw new Error('clipboard refused');
+    }
+
+    function legacyCopy(t) {
+        const area = el('textarea', { attrs: { readonly: '', 'aria-hidden': 'true' } });
+        area.value = t;
+        area.style.cssText = 'position:fixed;top:0;left:0;opacity:0;';
+        document.body.appendChild(area);
+        area.select();
+        try {
+            return document.execCommand('copy');
+        } catch (e) {
+            return false;
+        } finally {
+            area.remove();
+            exportCopy.focus();     // selecting moved focus into the textarea
+        }
+    }
+
+    exportCopy.addEventListener('click', async () => {
+        exportStatus.textContent = 'Copying…';
+        const text = fetchExport();
+        try {
+            await copyText(text);
+            exportStatus.textContent = 'Copied — paste it into a chat with Claude.';
+        } catch (e) {
+            const fetched = await text.then(() => true, () => false);
+            exportStatus.textContent = fetched
+                ? "Couldn't reach the clipboard — use Download instead."
+                : "Couldn't build the export.";
+        }
+    });
 
     function fillSelect(sel, values) {
         const prev = sel.value;

@@ -388,9 +388,11 @@ table.badge-grid th.sorted .sort-btn { color: var(--accent); }
 .diff-veryhard { color: var(--danger); }
 
 .actions { white-space: nowrap; }
-.actions .button-link {
+.export-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 16px 0 4px; }
+.export-row[hidden], #exportNote[hidden] { display: none; }
+.actions .button-link, .export-row .button-link {
     display: inline-block; background: var(--panel-2); color: var(--text);
     padding: 6px 12px; border: 1px solid var(--border); border-radius: 4px;
     margin-right: 6px; font-size: 0.9em; text-decoration: none;
 }
-.actions .button-link:hover { border-color: var(--accent); text-decoration: none; }
+.actions .button-link:hover, .export-row .button-link:hover { border-color: var(--accent); text-decoration: none; }
