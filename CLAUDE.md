@@ -576,7 +576,19 @@ location with each player's beaten levels as ranges — the evidence for "a leve
 It takes the players and the location from the page and **ignores room, difficulty and
 search**: stacking only shows up across rooms and grades, so a filtered export would miss what
 it exists for. "Any of my locations" differs from the page in one way — a badge no tracked
-location can host is dropped even if somebody holds it, since a route can't visit it. Copy tries
+location can host is dropped even if somebody holds it, since a route can't visit it.
+
+**Every line has to earn its tokens**, so nothing is written the reader already knows. Badges
+are grouped under "Missing for …" headings rather than each carrying who lacks it. A Where line
+appears at a chosen location only for a "can't tell" (every "no" was already filtered out), and
+across several locations only when some of them say no. A tip or watch-out that two or more
+listed badges share word for word — badge_tips gives the X for X, Deja Vu and visit-long
+families one text each — goes once under "Notes for several badges". Gamemode rules are written
+only for gamemodes a listed badge's `games` names. A hint is dropped when its answer is there,
+and "Room: any", "Players: Depends" and star values are never written. That took a two-player
+Coquitlam export from 64k to 50k characters; the brief tells Claude what an absent line means.
+
+Copy tries
 `ClipboardItem` with a promise (Safari wants the write inside the click), then `writeText`, then
 `execCommand('copy')`, which is the only one that works over plain HTTP or where the clipboard
 permission is denied — the Claude desktop app's browser pane denies it.

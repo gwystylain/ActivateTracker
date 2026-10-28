@@ -976,7 +976,7 @@ async def test_export_covers_the_ticked_players_at_the_chosen_location(tmp_path)
     assert resp.media_type == "text/markdown; charset=utf-8"
     assert text.startswith("# Activate badge plan — aaron and gmebagholder at Coquitlam\n")
     assert "landon" not in text
-    assert "### Night Owl" in text
+    assert "#### Night Owl" in text
     assert "Row By Row" not in text
     assert "- **Barrage**, 3 levels, best with 2 — aaron no scores here; gmebagholder 1–2" in text
 

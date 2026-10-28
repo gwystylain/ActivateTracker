@@ -18,12 +18,27 @@ on the page keeps a badge somebody already holds even where no tracked location
 can host it, since badges transfer; a route can't visit such a badge, so here it
 is dropped.
 
+**Nothing is written that the reader already knows or can't use**, because a
+paste into Claude is paid for by the token. Badges are grouped by who lacks
+them, so no badge repeats its own "missing" line. A Where line appears only
+when it says something: at a chosen location the scope already settled it,
+unless the answer there is "can't tell"; across several locations it is left
+out where every one of them is a yes. A tip or watch-out that several listed
+badges share (the X for X and visit-long families carry the same text) is
+written once, above the badges. Gamemode rules are written only for gamemodes a
+listed badge names, since the beaten levels are what the others contribute. A
+hint goes when its answer is there, "any room" and "Depends" say nothing, and
+star values buy nothing since badges stopped paying in stars.
+
 Pure, over the /api/badge-data payload and `public._badge_locations`' per-location
 catalog, so it is tested without a database.
 """
 from __future__ import annotations
 
+import re
+from collections import Counter
 from datetime import date
+from itertools import groupby
 from typing import Any
 
 from . import master_document
@@ -61,12 +76,16 @@ players, or can't be done here.
 How to read the data:
 
 - As far as we know, a badge goes to everyone in the game that meets its \
-condition, so one win can earn it for several of us. Someone who already holds \
-a badge can still play to make up the numbers.
+condition, so one win can earn it for several of us. Badges are grouped by who \
+still lacks them; anyone else already holds that badge but can still play to \
+make up the numbers.
 - "Requirement" is Activate's own wording and is the authority on what a badge \
 needs. Room, difficulty, player count, tips and answers come from community \
 documents and the players' Discord, which can be wrong or out of date; \
 "Players" is their best player count, not a hard rule.
+- No "Room" line means any room will do. {where_rule}
+- Tips that apply to several badges are written once, under "Notes for several \
+badges".
 - Treat "in a row" as consecutive games played by the same person, so a game in \
 between — a loss included — breaks the streak unless it counts too.
 - Levels are numbered from 1, as the site shows them. A level listed as beaten \
@@ -101,8 +120,11 @@ def build(
         missing = [p for p in players if not _earned(states, p, badge)]
         if missing and _doable(badge, chosen, choice, locations):
             rows.append((badge, missing))
+    # Most of us missing first, and the same set of us together, so the rows
+    # fall into groups; easiest first within a group.
     rows.sort(key=lambda r: (
         -len(r[1]),
+        [players.index(p) for p in r[1]],
         _difficulty_rank(r[0]),
         r[0]["name"].lower(),
         r[0]["badge_id"],
@@ -110,37 +132,54 @@ def build(
 
     if chosen:
         where, there = f"at {chosen['name']}", "there"
+        where_rule = "Everything listed can be done here unless a \"Where\" line says otherwise."
     elif choice == TRACKED and locations:
         where = f"at {_or([l['name'] for l in locations])}"
         there = "at each of those"
+        where_rule = "No \"Where\" line means every one of those locations can host it."
     else:
         where, there = "", "at the locations we play"
+        where_rule = "No \"Where\" line means every location we play can host it."
     if not locations:
         there = "where we play (none is catalogued yet, so that part is missing)"
 
+    shared = _shared_notes(rows)
+    grouped = len(players) > 1
     out = [
         f"# Activate badge plan — {names}" + (f" {where}" if where else ""),
         "",
         f"Exported from activateTracker on {today.isoformat()}.",
         "",
-        BRIEF.format(scope=where or "anywhere", there=there),
+        BRIEF.format(scope=where or "anywhere", there=there, where_rule=where_rule),
         "",
         "## The group",
         "",
         *(_player_line(p) for p in players),
+    ]
+    if shared:
+        out += ["", "## Notes for several badges", "", *_shared_lines(shared)]
+    out += [
         "",
         f"## Badges still missing ({len(rows)})",
         "",
-        "Most of us missing it first, then easiest first.",
+        "Grouped by who still lacks them, then easiest first." if grouped else "Easiest first.",
     ]
     if not rows:
         out += ["", "None — every badge in scope is already held by all of us."]
-    for badge, missing in rows:
-        out += ["", *_badge_block(badge, missing, players, states, scope, locations)]
+    for _, group in groupby(rows, key=lambda r: [p["id"] for p in r[1]]):
+        group = list(group)
+        if grouped:
+            out += ["", f"### {_group_heading(group[0][1], players)} ({len(group)})"]
+        for badge, missing in group:
+            out += ["", *_badge_block(
+                badge, missing, states, scope, locations, chosen, shared,
+                heading="####" if grouped else "###",
+            )]
 
+    named = {pair for badge, _ in rows for pair in badge.get("games") or ()}
     described: set[tuple[str, str]] = set()
     for loc in scope:
-        out += ["", *_gamemodes(loc, players, described)]
+        out += ["", *_gamemodes(loc, players, named, described)]
     return "\n".join(out).rstrip() + "\n"
 
 
@@ -184,14 +223,47 @@ def _player_line(p) -> str:
     return line + "."
 
 
-def _badge_block(badge, missing, players, states, scope, locations) -> list[str]:
-    lines = [f"### {badge['name']}", ""]
+def _group_heading(missing, players) -> str:
+    if len(missing) == len(players):
+        return "Missing for all of us"
+    names = _and([p["display_name"] for p in missing])
+    return f"Missing for {names}" + (" only" if len(missing) == 1 else "")
 
-    holders = [p for p in players if p not in missing]
-    line = f"- Missing: {', '.join(p['display_name'] for p in missing)}"
-    if holders:
-        line += f" (already held by {', '.join(p['display_name'] for p in holders)})"
-    lines.append(line)
+
+# The two repeatable fields, in the order a badge block writes them.
+_NOTE_FIELDS = (("tips", "Tip"), ("watch_out", "Watch out"))
+
+
+def _shared_notes(rows) -> dict[tuple[str, str], list[str]]:
+    """{(field, text): badge names} for every tip or watch-out that two or more
+    listed badges carry word for word — badge_tips gives whole families (X for
+    X, Deja Vu, the visit-long badges) one shared text, and writing it under
+    each of them is the same sentence paid for again and again."""
+    counts: Counter[tuple[str, str]] = Counter()
+    names: dict[tuple[str, str], list[str]] = {}
+    for badge, _ in rows:
+        for field, _label in _NOTE_FIELDS:
+            for text in dict.fromkeys(badge.get(field) or ()):
+                counts[(field, text)] += 1
+                names.setdefault((field, text), []).append(badge["name"])
+    return {key: names[key] for key, n in counts.items() if n > 1}
+
+
+def _shared_lines(shared) -> list[str]:
+    labels = dict(_NOTE_FIELDS)
+    return [
+        f"- **{labels[field]}** for {', '.join(sorted(names, key=_natural))}: {text}"
+        for (field, text), names in shared.items()
+    ]
+
+
+def _natural(name: str) -> list[Any]:
+    """"5 For 5" before "10 For 10", "Deja Vu" before "Deja Vu 2.0"."""
+    return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", name)]
+
+
+def _badge_block(badge, missing, states, scope, locations, chosen, shared, *, heading) -> list[str]:
+    lines = [f"{heading} {badge['name']}", ""]
 
     if badge.get("description"):
         lines.append(f"- Requirement: {badge['description']}")
@@ -208,17 +280,15 @@ def _badge_block(badge, missing, players, states, scope, locations) -> list[str]
             f"Difficulty: {badge['difficulty']}"
             + (" (our estimate, not the documents')" if badge.get("difficulty_estimated") else "")
         )
-    if badge.get("players"):
+    if badge.get("players") and badge["players"] != "Depends":
         grade.append(f"Players: {badge['players']}")
-    if badge.get("stars"):
-        grade.append(f"Stars: {badge['stars']}")
     if grade:
         lines.append("- " + " · ".join(grade))
 
     if badge.get("overlapping"):
         lines.append(f"- Overlaps with: {badge['overlapping']}")
 
-    where = _where(badge, locations)
+    where = _where(badge, locations, chosen)
     if where:
         lines.append(f"- Where: {where}")
     lines += _facts(badge, missing, scope)
@@ -229,24 +299,28 @@ def _badge_block(badge, missing, players, states, scope, locations) -> list[str]
 
     if badge.get("notes"):
         lines.append(f"- Notes: {badge['notes']}")
-    if badge.get("hint"):
+    # The hint exists to nudge someone solving it themselves; next to the
+    # answer it only costs words.
+    if badge.get("hint") and not badge.get("giveaway"):
         lines.append(f"- Hint: {badge['hint']}")
     if badge.get("giveaway"):
         lines.append(f"- Answer: {badge['giveaway']}")
-    lines += [f"- Tip: {t}" for t in badge.get("tips") or ()]
-    lines += [f"- Watch out: {w}" for w in badge.get("watch_out") or ()]
+    for field, label in _NOTE_FIELDS:
+        lines += [
+            f"- {label}: {text}"
+            for text in badge.get(field) or ()
+            if (field, text) not in shared
+        ]
     return lines
 
 
 def _rooms(badge) -> str | None:
     """"Hide (Relay) + Mega Grid (Mega Relay)" when every room is needed, "Mega
-    Laser or Trench" when any will do. A badge the documents grade but tie to
-    no room can be done in any of them; one they don't cover at all says
-    nothing."""
+    Laser or Trench" when any will do, and nothing for a badge tied to no room
+    — the brief says that means any."""
     rooms = badge.get("rooms") or ()
     if not rooms:
-        covered = badge.get("difficulty") or badge.get("players")
-        return "any" if covered else None
+        return None
     named: dict[str, list[str]] = {}
     for room, game in badge.get("games") or ():
         named.setdefault(room, []).append(game)
@@ -256,26 +330,38 @@ def _rooms(badge) -> str | None:
     return " or ".join(parts)
 
 
-def _where(badge, locations) -> str | None:
-    """Every tracked location's answer, whatever the scope — a badge that can't
-    be done here is worth knowing about for the next visit elsewhere."""
+def _where(badge, locations, chosen) -> str | None:
+    """Only an answer the reader doesn't already have.
+
+    At a chosen location every "no" was filtered out, so the one thing left to
+    say is "can't tell" (the photo room, at a location with no stored list).
+    Otherwise every tracked location's answer, but only when they aren't all
+    yes — a badge that can't be done somewhere is worth knowing about for the
+    next visit elsewhere, and one doable everywhere needs no line at all.
+    """
     where = badge.get("where") or {}
+    answers = [
+        (loc, w) for loc in ([chosen] if chosen else locations)
+        if (w := where.get(str(loc["location_id"])))
+    ]
+    if all(w["status"] == "yes" for _, w in answers):
+        return None
+    if chosen:
+        return f"can't tell if {chosen['name']} can host it — {answers[0][1]['why']}"
     parts = []
-    for loc in locations:
-        w = where.get(str(loc["location_id"]))
-        if not w:
-            continue
+    for loc, w in answers:
         part = f"{loc['name']} {w['status']}"
         if w.get("why"):
             part += f" ({w['why']})"
         parts.append(part)
-    return "; ".join(parts) or None
+    return "; ".join(parts)
 
 
 def _facts(badge, missing, scope) -> list[str]:
     """The location's own lines — Riddle 7.0's S games, the level count behind
     Activated — with progress only for those still missing the badge: what a
-    holder has beaten says nothing about it."""
+    holder has beaten says nothing about it. With one location in scope its
+    name is already in the title."""
     lines = []
     here = badge.get("here") or {}
     for loc in scope:
@@ -285,7 +371,8 @@ def _facts(badge, missing, scope) -> list[str]:
                 for p in missing
                 if (text := (f.get("players") or {}).get(str(p["id"])))
             ]
-            line = f"- {f['label']} at {loc['name']}: {f['text']}"
+            place = "" if len(scope) == 1 else f" at {loc['name']}"
+            line = f"- {f['label']}{place}: {f['text']}"
             if said:
                 line += f" ({'; '.join(said)})"
             lines.append(line)
@@ -307,10 +394,13 @@ def _progress(badge, missing, states) -> str | None:
     return ", ".join(parts) or None
 
 
-def _gamemodes(loc, players, described: set[tuple[str, str]]) -> list[str]:
+def _gamemodes(
+    loc, players, named: set[tuple[str, str]], described: set[tuple[str, str]]
+) -> list[str]:
     """Every co-op gamemode at one location, room by room in the site's order,
-    with each player's beaten levels. A gamemode's rules are written out the
-    first time it appears, so a second location doesn't repeat them."""
+    with each player's beaten levels. Rules are written only for a gamemode a
+    listed badge names (`named`), and only the first time it appears, so a
+    second location doesn't repeat them."""
     lines = [
         f"## Gamemodes at {loc['name']}",
         "",
@@ -332,8 +422,9 @@ def _gamemodes(loc, players, described: set[tuple[str, str]]) -> list[str]:
                 head += " (no clear consensus)"
         beaten = [f"{p['display_name']} {_beaten(g, loc['beaten'].get(p['id']))}" for p in players]
         lines.append(head + " — " + "; ".join(beaten))
-        if ref.get("description") and (g["room"], g["name"]) not in described:
-            described.add((g["room"], g["name"]))
+        pair = (g["room"], g["name"])
+        if ref.get("description") and pair in named and pair not in described:
+            described.add(pair)
             lines.append(f"  - {ref['description']}")
     return lines
 

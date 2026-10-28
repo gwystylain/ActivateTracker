@@ -55,10 +55,12 @@ def _build(badges, states, *, players=(AARON, EDWARD), locations=(COQUITLAM, LAN
 
 
 def _headings(text):
-    """The badge headings — the gamemode sections below them head their rooms
-    the same way."""
-    badges = text.split("## Gamemodes at", 1)[0]
-    return [line[4:] for line in badges.splitlines() if line.startswith("### ")]
+    """The badge headings: one level under the who's-missing groups when there
+    are several players, and the gamemode sections below head their rooms the
+    same way, so only the badge section is read."""
+    lines = text.split("## Badges still missing", 1)[1].split("## Gamemodes at", 1)[0].splitlines()
+    marker = "#### " if any(line.startswith("#### ") for line in lines) else "### "
+    return [line[len(marker):] for line in lines if line.startswith(marker)]
 
 
 MARATHON = _badge(
@@ -84,12 +86,21 @@ def test_lists_only_what_somebody_selected_still_lacks_most_missing_first():
     assert _headings(text)[:3] == ["Tiptoeing", "10 For 10", "The Marathon"]
     assert "Night Owl" not in text
     assert "## Badges still missing (3)" in text
-    assert "- Missing: Aaron (already held by Edward)" in text
+    # Grouped by who lacks them, rather than a "missing" line per badge.
+    assert "### Missing for all of us (2)" in text
+    assert "### Missing for Aaron only (1)" in text
+    assert "- Missing:" not in text
 
 
 def test_a_badge_with_no_state_row_counts_as_missing():
     text = _build([TIPTOEING], {"1": {}, "2": {"2": _state(True)}})
-    assert "- Missing: Aaron (already held by Edward)" in text
+    assert "### Missing for Aaron only (1)" in text
+
+
+def test_one_player_needs_no_groups():
+    text = _build([TIPTOEING], {"1": {}}, players=(AARON,))
+    assert "Missing for" not in text
+    assert "\n### Tiptoeing\n" in text
 
 
 def test_the_requirement_is_activate_s_wording_and_the_rooms_say_which_gamemode():
@@ -103,10 +114,16 @@ def test_the_requirement_is_activate_s_wording_and_the_rooms_say_which_gamemode(
     assert "- Overlaps with: 5 for 5" in text
 
 
-def test_a_graded_badge_with_no_room_can_be_done_in_any():
+def test_lines_that_say_nothing_are_left_out():
+    """No room means any room (the brief says so), "Depends" is no player
+    count, and star values buy nothing since badges stopped paying in stars."""
     five = _badge(5, "5 For 5", "Win five different level 5 games in a row")
+    assert five["players"] == "Depends"
     text = _build([five], {"1": {"5": _state(False)}, "2": {"5": _state(False)}})
-    assert "- Room: any" in text
+
+    assert "- Room:" not in text
+    assert "- Difficulty: Easy\n" in text
+    assert "Stars" not in text
 
 
 def test_a_chosen_location_drops_a_definite_no_and_keeps_what_it_can_t_rule_out():
@@ -121,6 +138,17 @@ def test_a_chosen_location_drops_a_definite_no_and_keeps_what_it_can_t_rule_out(
 
     assert sorted(_headings(text)) == ["Night Owl", "Photobomb"]
     assert text.startswith("# Activate badge plan — Aaron and Edward at Coquitlam\n")
+    # The scope settled "yes"; only the answer it couldn't settle is written.
+    assert text.count("- Where:") == 1
+    assert "- Where: can't tell if Coquitlam can host it — can't see it" in text
+
+
+def test_a_where_line_appears_only_where_some_location_says_no():
+    everywhere = _badge(9, "Night Owl", "Win a game after 11 PM", where={
+        "38": {"status": "yes", "why": None}, "72": {"status": "yes", "why": None},
+    })
+    text = _build([everywhere], {"1": {}, "2": {}}, choice=badge_export.TRACKED)
+    assert "- Where:" not in text
 
 
 def test_any_tracked_location_needs_one_that_isn_t_a_no():
@@ -167,7 +195,8 @@ def test_progress_and_location_facts_are_for_those_still_missing_it():
 
     text = _build([activated], states, choice=38)
 
-    assert "- Levels at Coquitlam: 490 to beat (Aaron: 169 beaten, 321 to go)" in text
+    # One location in scope, already named in the title.
+    assert "- Levels: 490 to beat (Aaron: 169 beaten, 321 to go)" in text
     assert "510 to beat" not in text           # Langley isn't where we're going
     assert "- Progress: Aaron 259 so far" in text
 
@@ -182,6 +211,24 @@ def test_the_answer_rides_along_for_an_easter_egg():
     egg = _badge(12, "Old School", "Earn 30 bonus lives in Labyrinth level 3.")
     text = _build([egg], {"1": {}, "2": {}})
     assert "- Answer: On Labyrinth 3, before the game starts" in text
+    assert "- Hint:" not in text                     # spent once the answer is there
+
+
+def test_a_hint_without_an_answer_is_kept():
+    riddle = _badge(13, "Some Riddle", "riddle text", hint="Think about it")
+    assert "- Hint: Think about it" in _build([riddle], {"1": {}, "2": {}})
+
+
+def test_a_tip_several_badges_share_is_written_once_above_them():
+    shared, own = "Start with your shakiest game.", "Zones is a gimme."
+    five = _badge(5, "5 For 5", "five", tips=(shared,))
+    ten = _badge(14, "10 For 10", "ten", tips=(shared, own))
+    text = _build([ten, five], {"1": {}, "2": {}})
+
+    assert text.count(shared) == 1
+    assert f"- **Tip** for 5 For 5, 10 For 10: {shared}" in text
+    assert text.index("## Notes for several badges") < text.index("## Badges still missing")
+    assert f"- Tip: {own}" in text
 
 
 def test_gamemodes_show_each_player_s_beaten_levels_numbered_from_one():
@@ -192,11 +239,15 @@ def test_gamemodes_show_each_player_s_beaten_levels_numbered_from_one():
     assert "None — every badge in scope is already held by all of us." in text
 
 
-def test_a_gamemode_s_rules_are_written_once_across_locations():
-    text = _build([], {"1": {}, "2": {}}, choice=None)
+def test_rules_are_written_once_and_only_for_gamemodes_a_badge_names():
+    """Tiptoeing names Zones, so its rules are worth reading; nothing listed
+    names Relay, whose line still carries the beaten levels."""
+    text = _build([TIPTOEING], {"1": {}, "2": {}}, choice=None)
 
     rules = "  - Listen to the colour called out by the announcer."
     assert sum(line.startswith(rules) for line in text.splitlines()) == 1
+    assert "Everyone starts by holding a coloured button" not in text
+    assert "- **Relay**, 10 levels" in text
     # Aaron has no snapshot at Langley at all: that is not "none beaten".
     langley = text.split("## Gamemodes at Langley", 1)[1]
     assert "Aaron no scores here; Edward none" in langley
