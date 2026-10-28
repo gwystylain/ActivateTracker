@@ -49,6 +49,9 @@ TRACKED = "tracked"
 # The document's own scale, in its own order. Unrecorded sorts after all of it.
 DIFFICULTIES = ("Easy", "Medium", "Hard", "Very Hard")
 
+# The brief names no badge. Claude reads a named example as one we want, and it
+# planned a route around The Marathon for two players who both held it, because
+# the stacking example here used to be that badge.
 BRIEF = """\
 I play Activate — rooms of short cooperative games, each gamemode with numbered \
 levels — with the people under "The group". Below is every badge we still lack \
@@ -60,21 +63,26 @@ What I'd like back:
 
 1. An ordered route: for each game, the room, gamemode and level, which badges \
 it earns or advances, and for whom.
-2. Stack badges wherever one game can count for several. For example, a Zones \
-level 5 cleared without stepping on a wrong colour is Tiptoeing and also one of \
-the five different level-5 wins 5 For 5 wants, and The Marathon's three relays \
-at level 5, played back to back, can be three more of those five.
+2. Stack badges wherever one game can count for several — say, a level cleared \
+the particular way one badge asks for, which is also one of the several \
+different wins another badge wants.
 3. Where badges need games "in a row", say where each streak starts, what is in \
 it, and what would break it.
-4. Badges that run for a whole visit (Keener, for one) — say what to do from \
-the first game on.
+4. Badges that run for a whole visit — say what to do from the first game on.
 5. Who should play each game when it matters: a badge's player count, or which \
 of us still needs it.
 6. What to leave for another visit and why: too hard for now, needs more \
 players, or can't be done here.
 
+Wherever you list badges in a block or table, put a concise description of \
+what each one asks for beside its name, so the plan can be followed without \
+this list beside it.
+
 How to read the data:
 
+- Only the badges under "Badges still missing" are wanted. A badge named \
+anywhere else but not listed there — in a tip, a note or an "Overlaps with" \
+line — is one all of us already hold{absent}, so don't plan for it.
 - As far as we know, a badge goes to everyone in the game that meets its \
 condition, so one win can earn it for several of us. Badges are grouped by who \
 still lacks them; anyone else already holds that badge but can still play to \
@@ -133,13 +141,16 @@ def build(
     if chosen:
         where, there = f"at {chosen['name']}", "there"
         where_rule = "Everything listed can be done here unless a \"Where\" line says otherwise."
+        absent = " or one that can't be done here"
     elif choice == TRACKED and locations:
         where = f"at {_or([l['name'] for l in locations])}"
         there = "at each of those"
         where_rule = "No \"Where\" line means every one of those locations can host it."
+        absent = " or one none of those locations can host"
     else:
         where, there = "", "at the locations we play"
         where_rule = "No \"Where\" line means every location we play can host it."
+        absent = ""
     if not locations:
         there = "where we play (none is catalogued yet, so that part is missing)"
 
@@ -150,7 +161,9 @@ def build(
         "",
         f"Exported from activateTracker on {today.isoformat()}.",
         "",
-        BRIEF.format(scope=where or "anywhere", there=there, where_rule=where_rule),
+        BRIEF.format(
+            scope=where or "anywhere", there=there, where_rule=where_rule, absent=absent
+        ),
         "",
         "## The group",
         "",

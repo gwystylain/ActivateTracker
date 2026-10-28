@@ -1,7 +1,8 @@
+import re
 from datetime import date
 
 from app import badge_export
-from app.badge_reference import lookup
+from app.badge_reference import BADGES, lookup
 
 TODAY = date(2026, 10, 20)
 
@@ -90,6 +91,39 @@ def test_lists_only_what_somebody_selected_still_lacks_most_missing_first():
     assert "### Missing for all of us (2)" in text
     assert "### Missing for Aaron only (1)" in text
     assert "- Missing:" not in text
+
+
+def test_a_badge_everyone_holds_is_named_nowhere():
+    """The brief used to give The Marathon as its stacking example, and Claude
+    planned a route around it for two players who both held it."""
+    states = {p: {"1": _state(True), "2": _state(True), "3": _state(False)} for p in ("1", "2")}
+    text = _build([MARATHON, TIPTOEING, TEN_FOR_TEN], states)
+
+    assert _headings(text) == ["10 For 10"]
+    assert "Marathon" not in text
+    assert "Tiptoeing" not in text
+
+
+def test_the_brief_names_no_badge_and_says_an_unlisted_one_is_not_wanted():
+    """Tips and overlaps still name other badges, held or not, so the brief
+    says what a name outside the list means."""
+    for name in {r["name"] for r in BADGES.values()}:
+        assert not re.search(rf"\b{re.escape(name)}\b", badge_export.BRIEF), name
+
+    text = _build([TIPTOEING], {"1": {}, "2": {}}, choice=38)
+    assert ('A badge named anywhere else but not listed there — in a tip, a note or an'
+            ' "Overlaps with" line — is one all of us already hold or one that can\'t be'
+            ' done here, so don\'t plan for it.') in text
+    anywhere = _build([TIPTOEING], {"1": {}, "2": {}}, choice=None)
+    assert "is one all of us already hold, so don't plan for it." in anywhere
+
+
+def test_the_brief_asks_for_each_badge_to_be_described_where_the_plan_lists_it():
+    """A route that says only "earns Tiptoeing" sends the reader back to the
+    export at the venue to find out what Tiptoeing wants."""
+    text = _build([TIPTOEING], {"1": {}, "2": {}})
+    assert ("Wherever you list badges in a block or table, put a concise description"
+            " of what each one asks for beside its name") in text
 
 
 def test_a_badge_with_no_state_row_counts_as_missing():

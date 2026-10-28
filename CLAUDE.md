@@ -573,6 +573,12 @@ stacks badges (one careful Zones 5 is Tiptoeing *and* one of 5 For 5's five), th
 ticked player lacks with Activate's wording and the community detail, then every gamemode at the
 location with each player's beaten levels as ranges — the evidence for "a level 5 we can win".
 
+**The brief names no badge.** Claude reads a named example as a badge to collect: when the
+stacking example was The Marathon, it planned around The Marathon for two players who both held
+it. A test checks `BRIEF` against every name in the reference. Tips, notes and "Overlaps with"
+lines still name other badges, held or not, so the brief also says that a badge named anywhere
+but absent from the list is already held by everyone (or can't be done in the chosen scope).
+
 It takes the players and the location from the page and **ignores room, difficulty and
 search**: stacking only shows up across rooms and grades, so a filtered export would miss what
 it exists for. "Any of my locations" differs from the page in one way — a badge no tracked
