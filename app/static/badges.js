@@ -37,7 +37,7 @@
     const KEY = 'atrk.badges';
     const CLOSE_LIMIT = 15;
     const FARM_LIMIT = 15;
-    const FARMER_COLS = 6;   // #, Badge, Room, Difficulty, Players, Badges to gain
+    const FARMER_COLS = 5;   // Badge, Room, Difficulty, Players, Badges to gain
     // The one location-filter value that isn't a location id: doable at any of
     // them. A sentinel, so the option and the filter can't drift apart.
     const ANY_TRACKED = 'tracked';
@@ -454,7 +454,7 @@
             || tieBreak(a.badge, b.badge));
 
         farmerBody.replaceChildren();
-        rows.slice(0, FARM_LIMIT).forEach((r, i) => {
+        rows.slice(0, FARM_LIMIT).forEach(r => {
             const b = r.badge;
             const isOpen = expanded.has(b.badge_id);
             // The row is the tab stop, so the name inside it must not be one
@@ -467,7 +467,6 @@
                     'aria-expanded': isOpen ? 'true' : 'false',
                 },
             }, [
-                el('td', { className: 'muted small', text: String(i + 1) }),
                 el('td', null, [
                     el('span', { className: 'toggle', text: '▸', attrs: { 'aria-hidden': 'true' } }),
                     badgeName(b, false),
