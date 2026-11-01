@@ -53,12 +53,16 @@ def _make_static_versioner(static_dir: Path):
 
 
 def _build_trigger(schedule: str, hour_utc: int) -> CronTrigger | None:
+    # A trigger keeps its own zone rather than the scheduler's, and without one
+    # it asks the OS — so hour_utc meant local time on any host not set to UTC,
+    # and a Windows zone tzlocal can't map ("British Columbia Standard Time")
+    # failed startup outright.
     if schedule == "manual":
         return None
     if schedule == "daily":
-        return CronTrigger(hour=hour_utc, minute=0)
+        return CronTrigger(hour=hour_utc, minute=0, timezone="UTC")
     # Treat anything else as a 5-field crontab.
-    return CronTrigger.from_crontab(schedule)
+    return CronTrigger.from_crontab(schedule, timezone="UTC")
 
 
 @asynccontextmanager
