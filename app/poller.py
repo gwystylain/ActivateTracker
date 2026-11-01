@@ -9,6 +9,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Iterable
 
+from apscheduler.triggers.cron import CronTrigger
 from curl_cffi.requests import AsyncSession
 from curl_cffi.requests.exceptions import RequestException
 
@@ -25,6 +26,24 @@ _poll_lock = asyncio.Lock()
 # What a failed request to playactivate.com looks like. Anything else escaping
 # a fetch is a bug, and is left to propagate.
 _FETCH_FAILURES = (RequestException, scraper.ScrapeError, scraper.FetchError)
+
+
+def build_trigger(schedule: str, hour_utc: int) -> CronTrigger | None:
+    """When the scheduled poll runs, from `poll.schedule`; None for manual.
+
+    Here rather than in main, which builds the app — config and all — the
+    moment it is imported, so a test of this would need a real config.yaml.
+    """
+    # A trigger keeps its own zone rather than the scheduler's, and without one
+    # it asks the OS — so hour_utc meant local time on any host not set to UTC,
+    # and a Windows zone tzlocal can't map ("British Columbia Standard Time")
+    # failed startup outright.
+    if schedule == "manual":
+        return None
+    if schedule == "daily":
+        return CronTrigger(hour=hour_utc, minute=0, timezone="UTC")
+    # Treat anything else as a 5-field crontab.
+    return CronTrigger.from_crontab(schedule, timezone="UTC")
 
 
 def parse_handles(raw: str) -> list[str]:

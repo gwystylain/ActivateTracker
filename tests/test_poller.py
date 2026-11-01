@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfoNotFoundError
 
+import apscheduler.triggers.cron as apscheduler_cron
 import pytest
 
 from app import db as db_mod
@@ -44,6 +46,27 @@ def _result(total: int) -> ScrapeResult:
         levels_beat=1,
         level_count=470,
     )
+
+
+def _unmappable_zone():
+    raise ZoneInfoNotFoundError("British Columbia Standard Time")
+
+
+def test_poll_triggers_run_in_utc_whatever_the_host_says(monkeypatch):
+    """A trigger with no zone asks the OS, which made hour_utc local time on a
+    host not set to UTC, and on Windows set to a zone tzlocal can't map it took
+    the whole app down at startup."""
+    monkeypatch.setattr(apscheduler_cron, "get_localzone", _unmappable_zone)
+
+    daily = poller_mod.build_trigger("daily", 11)
+    crontab = poller_mod.build_trigger("0 11 * * *", 0)
+
+    noon = datetime(2026, 11, 1, 12, tzinfo=timezone.utc)
+    for trigger in (daily, crontab):
+        fire = trigger.get_next_fire_time(None, noon)
+        assert fire.utcoffset().total_seconds() == 0
+        assert (fire.day, fire.hour) == (2, 11)
+    assert poller_mod.build_trigger("manual", 11) is None
 
 
 def test_snapshot_persists_rank_and_levels_beat(tmp_path):

@@ -7,7 +7,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -52,19 +51,6 @@ def _make_static_versioner(static_dir: Path):
     return static_v
 
 
-def _build_trigger(schedule: str, hour_utc: int) -> CronTrigger | None:
-    # A trigger keeps its own zone rather than the scheduler's, and without one
-    # it asks the OS — so hour_utc meant local time on any host not set to UTC,
-    # and a Windows zone tzlocal can't map ("British Columbia Standard Time")
-    # failed startup outright.
-    if schedule == "manual":
-        return None
-    if schedule == "daily":
-        return CronTrigger(hour=hour_utc, minute=0, timezone="UTC")
-    # Treat anything else as a 5-field crontab.
-    return CronTrigger.from_crontab(schedule, timezone="UTC")
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cfg = config_mod.load_config()
@@ -78,7 +64,7 @@ async def lifespan(app: FastAPI):
     app.state.templates = templates
 
     scheduler: AsyncIOScheduler | None = None
-    trigger = _build_trigger(cfg.poll.schedule, cfg.poll.hour_utc)
+    trigger = poller.build_trigger(cfg.poll.schedule, cfg.poll.hour_utc)
     if trigger is not None:
         scheduler = AsyncIOScheduler(timezone="UTC")
 
