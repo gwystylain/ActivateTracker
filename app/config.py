@@ -121,6 +121,78 @@ class BadgeConfig(BaseModel):
         return v
 
 
+class BookingVenue(BaseModel):
+    """One location's booking checkout.
+
+    `slug` is this app's name for the location (the same word as a
+    `player_locations.slug`); `roller_venue` is the venue's name in ROLLER,
+    Activate's booking system — the path segment of its checkout,
+    `ecom.roller.app/<roller_venue>/main`, which is the iframe the site's own
+    Book Now button opens.
+    """
+
+    slug: str
+    name: str
+    roller_venue: str
+
+
+def _default_booking_venues() -> list[BookingVenue]:
+    return [
+        BookingVenue(slug="coquitlam", name="Coquitlam", roller_venue="activatecoquitlam"),
+        BookingVenue(slug="langley", name="Langley", roller_venue="activatelangley"),
+    ]
+
+
+class BookingsConfig(BaseModel):
+    """The booking checkout, read for how full each upcoming session is.
+
+    Off by default, like every leg that leaves playactivate.com: ROLLER is
+    Activate's booking vendor, a different host from the scores, and nothing
+    should reach it unless this says so.
+    """
+
+    enabled: bool = False
+    api_base: str = "https://api.roller.app/api"
+    checkout: str = "main"
+    venues: list[BookingVenue] = Field(default_factory=_default_booking_venues)
+    # Session times are the venue's wall clock; this is that clock.
+    timezone: str = "America/Vancouver"
+    # Today plus this many days, read on every poll.
+    days_ahead: int = 7
+    # Hourly through opening hours. Most of an evening's bookings land the same
+    # day, so the forecast learns how much a session fills late only if a poll
+    # lands shortly before it starts. UTC, like poll.schedule: 16:05 to 06:05
+    # UTC is 08:05 to 22:05 Pacific in winter, 09:05 to 23:05 in summer.
+    schedule: str = "5 0-6,16-23 * * *"
+    spacing_seconds: tuple[float, float] = (1.0, 3.0)
+
+    @field_validator("timezone")
+    @classmethod
+    def _check_tz(cls, v: str) -> str:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, ValueError) as e:
+            raise ValueError(f"bookings.timezone {v!r} is not a known time zone") from e
+        return v
+
+    @field_validator("days_ahead")
+    @classmethod
+    def _check_days(cls, v: int) -> int:
+        if not 0 <= v <= 30:
+            raise ValueError("bookings.days_ahead must be in 0..30")
+        return v
+
+    @field_validator("spacing_seconds")
+    @classmethod
+    def _check_spacing(cls, v: tuple[float, float]) -> tuple[float, float]:
+        lo, hi = v
+        if lo < 0 or hi < lo:
+            raise ValueError("bookings.spacing_seconds must be (lo, hi) with 0 <= lo <= hi")
+        return v
+
+
 class ServerConfig(BaseModel):
     trusted_proxy_hops: int = 1
     forwarded_allow_ips: str = "*"
@@ -131,6 +203,7 @@ class AppConfig(BaseModel):
     session: SessionConfig
     poll: PollConfig = Field(default_factory=PollConfig)
     badges: BadgeConfig = Field(default_factory=BadgeConfig)
+    bookings: BookingsConfig = Field(default_factory=BookingsConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
 
 

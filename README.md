@@ -76,6 +76,8 @@ See `config.yaml.example` for the full schema. Notable knobs:
 | `poll.schedule` | `"daily"`, `"manual"`, or a 5-field crontab like `"0 11 * * *"`. |
 | `poll.hour_utc` | hour of day for `"daily"` (0–23 UTC). |
 | `poll.user_agent` | UA string sent to playactivate.com. |
+| `bookings.enabled` | read the booking checkout for the `/busy` forecast. Off by default. |
+| `bookings.schedule` | UTC crontab for the booking poll; hourly through opening hours by default. |
 | `server.trusted_proxy_hops` | number of proxies in front (nginx-proxy-manager = 1). |
 
 To change the admin password, generate a new hash, edit `config.yaml`, and
@@ -145,6 +147,8 @@ app/
 ├── scraper.py         curl_cffi fetch + parsers for the site's JSON endpoints
 ├── poller.py          poll_all() + visit detection
 ├── streak.py          pure streak/visit math
+├── busy.py            booking reads + the /busy crowd forecast
+├── roller.py          the booking checkout's client (ROLLER)
 ├── auth.py            bcrypt, signed sessions, login throttling
 ├── security.py        CSRF + security headers middleware
 ├── routes/            public, auth_routes, admin

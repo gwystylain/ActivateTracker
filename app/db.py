@@ -141,6 +141,29 @@ CREATE TABLE IF NOT EXISTS location_badges (
     PRIMARY KEY (location_id, badge_id)
 );
 
+-- The booking checkout's floor: the least capacity it had left at any point in
+-- the `minutes` from `session_start`, i.e. how full the busiest moment of a
+-- visit booked then would be. Written only when a reading differs from its
+-- previous row, so the value at time X is the latest row at or before X — and
+-- only if booking_polls shows that day was actually read near X. Without the
+-- polls table a quiet stretch and an unobserved one look the same.
+CREATE TABLE IF NOT EXISTS booking_floor (
+    venue         TEXT    NOT NULL,   -- config bookings.venues[].slug
+    session_start TEXT    NOT NULL,   -- venue wall clock, 'YYYY-MM-DDTHH:MM'
+    minutes       INTEGER NOT NULL,   -- the visit length the reading covers: 60 | 90
+    observed_at   TEXT    NOT NULL,   -- UTC isoformat
+    remaining     INTEGER NOT NULL,   -- can go negative: the checkout overbooks
+    capacity      INTEGER NOT NULL,   -- the floor's, as the same response stated it
+    PRIMARY KEY (venue, session_start, minutes, observed_at)
+);
+
+CREATE TABLE IF NOT EXISTS booking_polls (
+    venue        TEXT NOT NULL,
+    service_date TEXT NOT NULL,       -- 'YYYY-MM-DD', venue wall clock
+    polled_at    TEXT NOT NULL,       -- UTC isoformat
+    PRIMARY KEY (venue, service_date, polled_at)
+);
+
 CREATE TABLE IF NOT EXISTS login_attempts (
     ip           TEXT NOT NULL,
     attempted_at TEXT NOT NULL

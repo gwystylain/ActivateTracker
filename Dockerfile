@@ -16,7 +16,8 @@ RUN pip install --prefix=/install \
     "bcrypt==4.2.1" \
     "PyYAML==6.0.2" \
     "pydantic==2.10.4" \
-    "APScheduler==3.11.0"
+    "APScheduler==3.11.0" \
+    "tzdata==2026.2"
 
 
 FROM python:3.12-slim AS runtime

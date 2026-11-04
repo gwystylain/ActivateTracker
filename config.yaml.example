@@ -49,6 +49,29 @@ badges:
   backoff_seconds: 30.0          # first wait, doubling; a Retry-After wins
   max_wait_seconds: 120.0        # longer than this, give up: a poll holds a lock
 
+bookings:
+  # The /busy page's data: how full the floor is for every upcoming session in
+  # Activate's booking checkout (ROLLER, the Book Now iframe on each location
+  # page). A different host from the scores, so it is off until you turn it on.
+  # 16 requests a poll (2 venues x 8 days), each ~240 KB of JSON that compresses to under 10 KB.
+  enabled: false
+  api_base: "https://api.roller.app/api"
+  checkout: "main"
+  venues:
+    - slug: coquitlam          # this app's name for it
+      name: Coquitlam
+      roller_venue: activatecoquitlam   # ecom.roller.app/<this>/main
+    - slug: langley
+      name: Langley
+      roller_venue: activatelangley
+  timezone: "America/Vancouver"  # session times are the venues' wall clock
+  days_ahead: 7                  # today plus this many days, every poll
+  # UTC crontab, or "manual". Hourly through opening hours: most of an evening's
+  # bookings land the same day, and the forecast only learns how late a session
+  # fills if a poll lands shortly before it starts.
+  schedule: "5 0-6,16-23 * * *"
+  spacing_seconds: [1.0, 3.0]    # min/max delay between requests
+
 server:
   # Number of trusted reverse-proxy hops in front of the app (e.g. nginx-proxy-manager = 1).
   trusted_proxy_hops: 1

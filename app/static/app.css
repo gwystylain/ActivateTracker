@@ -396,3 +396,85 @@ table.badge-grid th.sorted .sort-btn { color: var(--accent); }
     margin-right: 6px; font-size: 0.9em; text-decoration: none;
 }
 .actions .button-link:hover, .export-row .button-link:hover { border-color: var(--accent); text-decoration: none; }
+
+/* ---- /busy ---- */
+input[type=time] {
+    padding: 6px 10px; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px;
+    font-family: inherit; font-size: inherit; color-scheme: dark;
+}
+input[type=time]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+#busyCard.stale { opacity: 0.4; }
+.busy-answer { font-size: 1.15rem; margin: 0 0 14px; }
+.busy-answer strong { color: var(--accent); }
+
+.busy-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: 0.85em; margin-bottom: 12px; }
+.busy-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.swatch { display: inline-block; width: 14px; height: 10px; border-radius: 2px; }
+.swatch-now { background: var(--muted); }
+.swatch-more { background: var(--muted); opacity: 0.4; }
+.swatch-strip { background: linear-gradient(90deg, rgba(88, 166, 255, 0.12), rgba(88, 166, 255, 1)); }
+
+/* Day | the bar with its strip beneath | the number. The axis row shares the
+   grid so its time labels sit over the strips they describe. */
+.busy-rows { display: flex; flex-direction: column; }
+.busy-row, .busy-axis {
+    display: grid; grid-template-columns: 8rem minmax(0, 1fr) 9.5rem;
+    gap: 4px 16px; align-items: center;
+}
+.busy-row { padding: 10px 0; border-top: 1px solid var(--border); }
+.busy-day { line-height: 1.3; }
+.busy-day .busy-date { display: block; font-size: 0.9em; }
+.busy-tag {
+    display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px;
+    border: 1px solid var(--accent); color: var(--accent); font-size: 0.75em;
+    font-weight: 600; vertical-align: 1px;
+}
+.busy-value {
+    display: flex; flex-direction: column; align-items: flex-end;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.busy-value strong { font-size: 1.1rem; }
+.busy-row.inactive .busy-day, .busy-row.inactive .busy-value { color: var(--muted); }
+
+.busy-plot { display: flex; flex-direction: column; gap: 6px; }
+/* Booked-so-far and expected-late as two segments of one bar, a 2px surface
+   gap between them and the data end rounded; the baseline end stays square. */
+.busy-bar {
+    display: flex; gap: 2px; height: 14px; outline-offset: 2px;
+    /* A hairline track, so a day with nothing booked still reads as a bar of zero. */
+    background: linear-gradient(var(--border), var(--border)) left center / 100% 1px no-repeat;
+}
+.busy-bar:focus-visible { outline: 2px solid var(--accent); border-radius: 2px; }
+.busy-bar .seg { display: block; height: 100%; min-width: 0; background: var(--muted); }
+.busy-bar .seg-more { opacity: 0.4; }
+.busy-bar .seg.end { border-radius: 0 4px 4px 0; }
+.busy-row.quietest .busy-bar .seg { background: var(--accent); }
+
+/* Expected crowd every 15 minutes around the visit: one hue, stronger as it
+   fills. The visit itself is outlined. */
+.busy-strip { position: relative; display: grid; gap: 2px; height: 12px; }
+.busy-strip .cell {
+    border-radius: 2px;
+    background: rgba(88, 166, 255, calc(0.12 + 0.88 * var(--load, 0)));
+}
+.busy-strip .cell.shut { background: transparent; border: 1px dashed var(--border); }
+.busy-strip .cell.chosen { outline: 2px solid var(--text); outline-offset: 1px; }
+
+.busy-axis { color: var(--muted); font-size: 0.75em; margin-bottom: 2px; }
+.busy-axis-track { position: relative; height: 1.3em; grid-column: 2; }
+.busy-axis-track span { position: absolute; top: 0; white-space: nowrap; transform: translateX(-50%); }
+.busy-axis-track .edge-start { transform: none; }
+.busy-axis-track .edge-end { transform: translateX(-100%); }
+.busy-axis-track .mark { color: var(--text); }
+
+.busy-tip { white-space: pre-line; pointer-events: none; }
+
+@media (max-width: 560px) {
+    .busy-row, .busy-axis { grid-template-columns: minmax(0, 1fr) auto; }
+    .busy-row .busy-plot { grid-column: 1 / -1; grid-row: 2; }
+    .busy-axis > span:first-child { display: none; }
+    .busy-axis-track { grid-column: 1 / -1; }
+    .busy-value { flex-direction: row; align-items: baseline; gap: 6px; }
+}

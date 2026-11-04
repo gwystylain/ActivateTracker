@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from . import busy
 from . import config as config_mod
 from . import db as db_mod
 from . import poller
@@ -63,11 +64,9 @@ async def lifespan(app: FastAPI):
     templates.env.globals["static_v"] = _make_static_versioner(STATIC_DIR)
     app.state.templates = templates
 
-    scheduler: AsyncIOScheduler | None = None
+    scheduler = AsyncIOScheduler(timezone="UTC")
     trigger = poller.build_trigger(cfg.poll.schedule, cfg.poll.hour_utc)
     if trigger is not None:
-        scheduler = AsyncIOScheduler(timezone="UTC")
-
         async def scheduled_poll():
             try:
                 await poller.poll_all(conn, cfg.poll, badge_cfg=cfg.badges)
@@ -75,10 +74,31 @@ async def lifespan(app: FastAPI):
                 log.exception("scheduled poll failed")
 
         scheduler.add_job(scheduled_poll, trigger, id="poll_all", max_instances=1)
-        scheduler.start()
-        log.info("scheduler started: %s", trigger)
+        log.info("score poll scheduled: %s", trigger)
     else:
-        log.info("scheduler disabled (poll.schedule = manual)")
+        log.info("score poll not scheduled (poll.schedule = manual)")
+
+    booking_trigger = (
+        poller.build_trigger(cfg.bookings.schedule, cfg.poll.hour_utc)
+        if cfg.bookings.enabled
+        else None
+    )
+    if booking_trigger is not None:
+        async def scheduled_bookings():
+            try:
+                await busy.poll_bookings(conn, cfg.bookings)
+            except Exception:
+                log.exception("scheduled booking poll failed")
+
+        scheduler.add_job(
+            scheduled_bookings, booking_trigger, id="poll_bookings", max_instances=1
+        )
+        log.info("booking poll scheduled: %s", booking_trigger)
+
+    if scheduler.get_jobs():
+        scheduler.start()
+    else:
+        scheduler = None
 
     try:
         yield

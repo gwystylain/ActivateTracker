@@ -19,6 +19,7 @@ dependencies = [
     "PyYAML==6.0.2",
     "pydantic==2.10.4",
     "APScheduler==3.11.0",
+    "tzdata==2026.2",           # zoneinfo data; slim images no longer ship it
 ]
 
 [project.optional-dependencies]

@@ -14,10 +14,19 @@
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <button type="submit">Refresh + rebuild catalog</button>
             </form>
+            {% if bookings_enabled %}
+            <form method="post" action="/admin/refresh-bookings" class="inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit">Refresh bookings now</button>
+            </form>
+            {% endif %}
         </div>
     </div>
     {% set refreshed = request.query_params.get('refreshed') %}
-    {% if refreshed == 'catalog' %}
+    {% if refreshed == 'bookings' %}
+        <p class="ok">Booking refresh started in background. The <a href="/busy">Busy page</a>
+            updates once it finishes.</p>
+    {% elif refreshed == 'catalog' %}
         <p class="ok">Refresh started in background, re-reading every room at every location.
             That's one request per room, so give it a minute before reloading.</p>
     {% elif refreshed %}

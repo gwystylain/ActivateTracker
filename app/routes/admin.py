@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, BackgroundTasks, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from .. import auth, poller
+from .. import auth, busy, poller
 from ..db import transaction
 from ..poller import format_handles, parse_handles
 
@@ -56,6 +56,7 @@ async def admin_home(request: Request):
             ],
             "csrf_token": auth.csrf_token_for(session),
             "username": session.get("u"),
+            "bookings_enabled": request.app.state.config.bookings.enabled,
         },
     )
 
@@ -292,6 +293,21 @@ async def manual_catalog_refresh(request: Request, background: BackgroundTasks):
 
     background.add_task(run)
     return RedirectResponse("/admin?refreshed=catalog", status_code=303)
+
+
+@router.post("/admin/refresh-bookings")
+async def manual_bookings_refresh(request: Request, background: BackgroundTasks):
+    _require_session(request)
+    cfg = request.app.state.config
+    conn = request.app.state.db
+    if not cfg.bookings.enabled:
+        raise HTTPException(400, "bookings.enabled is false in config.yaml")
+
+    async def run():
+        await busy.poll_bookings(conn, cfg.bookings)
+
+    background.add_task(run)
+    return RedirectResponse("/admin?refreshed=bookings", status_code=303)
 
 
 # ---------- helpers ----------

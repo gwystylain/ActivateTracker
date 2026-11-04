@@ -3,14 +3,16 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from .. import badge_locations, badge_reference, badge_tips
 from .. import badge_export as badge_export_mod
+from .. import busy as busy_mod
 from .. import catalog as catalog_mod
 from .. import master_document
 from .. import streak as streak_mod
@@ -182,6 +184,44 @@ async def badges(request: Request):
             "csrf_token": csrf_token_for(session),
         },
     )
+
+
+@router.get("/busy", response_class=HTMLResponse)
+async def busy_page(request: Request):
+    cfg = request.app.state.config
+    templates = request.app.state.templates
+    session = read_session(cfg, request.cookies.get(cfg.session.cookie_name))
+
+    return templates.TemplateResponse(
+        "busy.html",
+        {
+            "request": request,
+            "venues": [{"slug": v.slug, "name": v.name} for v in cfg.bookings.venues],
+            "enabled": cfg.bookings.enabled,
+            "logged_in": session is not None,
+            "csrf_token": csrf_token_for(session),
+        },
+    )
+
+
+@router.get("/api/busy-forecast")
+async def busy_forecast(request: Request, venue: str) -> JSONResponse:
+    """Every upcoming day's expected floor load at one venue, in 15-minute steps.
+
+    One fetch per venue: the page averages whichever steps fall inside the
+    visitor's chosen time and session length itself.
+    """
+    cfg = request.app.state.config
+    if venue not in {v.slug for v in cfg.bookings.venues}:
+        return JSONResponse({"error": "unknown venue"}, status_code=404)
+    payload = busy_mod.forecast(
+        request.app.state.db,
+        venue,
+        now=datetime.now(timezone.utc),
+        tz=ZoneInfo(cfg.bookings.timezone),
+        days=7,
+    )
+    return JSONResponse(payload)
 
 
 @router.get("/api/badge-data")

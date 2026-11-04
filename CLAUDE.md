@@ -682,3 +682,49 @@ first row read.
 `public._beaten_levels` (raw_scores_json → `{(game_id, level_id): high}`, dropping zeros) and
 `public._latest_snapshots` (newest snapshot per visible player at a location) are shared by
 `_build_records` and `/api/game-data`; the zero-is-no-score rule lives in the former only.
+
+### /busy: a crowd forecast from the booking checkout's floor
+Every location page's Book Now opens ROLLER's hosted checkout in an iframe
+(`ecom.roller.app/activatecoquitlam/main`, `.../activatelangley/main`), which fills itself from
+one request a day: `api.roller.app/api/checkout/main/product-availability?date=`, sent with
+`X-Api-Key: <venue>` (the venue's name, not a secret) and `X-Checkout-Slug: main`. It answers
+with every product the venue sells, ~240 KB of JSON, Brotli'd on the wire; `productId` doesn't
+filter it.
+
+Each session's allocation names ROLLER "locations" (capacity resources) and `resourceTimes`
+gives what each has left. There are two kinds, and **only one is the crowd**:
+
+- the per-start slot, 15 minutes wide — admission 18 at Coquitlam / 20 at Langley, groups 30.
+  This is the widget's "N left" and the "two pools" the products appear to have. It goes
+  negative when a start is overbooked (-7 reads as Sold out).
+- the **floor**, shared by every product — 81 at Coquitlam, 91 at Langley — reported as the
+  *least* it has left anywhere in that session's own 60- or 90-minute window. So
+  `capacity - remaining` is how many booked people share the floor at the busiest moment of a
+  visit starting then, with groups, parties and true ticket lengths already counted by ROLLER.
+  A 90-minute window is exactly the lesser of the 60-minute windows at its start and half an
+  hour later; `test_a_ninety_minute_window_is_the_lesser_of_its_two_hours` checks every start.
+
+`roller.parse_floor` finds the floor as the one location every product with sessions draws
+on, and refuses a payload with two rather than guess. `booking_floor` stores one reading per
+`(start, minutes)` and is **change-only**: a row only when the reading moves. That is safe
+only alongside `booking_polls`, one row per successful `(venue, day)` read, because "the value
+at X" is the latest row at or before X *only if that day was read within `busy.FRESH` before X*
+— otherwise an outage reads as a quiet stretch. A failed day writes no poll row.
+
+Five days out an evening reads as empty because nobody has booked it yet, so the forecast adds
+**pickup**: the mean gain finished windows like it made from the same lead time to their start
+(`PickupModel`, most specific bucket with >= `MIN_ANALOG_DATES` dates: length+weekday+hour, then
+Mon–Thu/Fri/Sat/Sun+hour, then hour). Windows that gained nothing count as zeroes, or every
+estimate would be the busy ones'. Lead is measured from the day's last *read*, not the request,
+since the booked number is as old as the read. Until there is history the page says "quietest
+so far", because without pickup the furthest-off evening wins just by being far off.
+
+`/api/busy-forecast?venue=` sends each upcoming day's readings per 15-minute arrival, now and
+projected, as `[60-minute, 90-minute]` pairs (None where no such visit is sold). `busy.js`
+picks the chosen arrival and length, so changing either never refetches; the bar is scaled to
+the floor's capacity, so its length is how full the place is. `bookings.enabled` is off by
+default, like every leg that leaves playactivate.com.
+
+`tests/fixtures/roller/` holds both venues' `product-availability` for 2026-11-04, captured in
+the same minute and gzipped as received (240 KB each otherwise). Numbers pinned against them
+are the capture's, not the venue's — except the capacities and the window rule.
