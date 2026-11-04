@@ -24,21 +24,10 @@
             <div class="segmented" role="group" aria-labelledby="busyLengthLabel" id="busyLength">
                 <button type="button" data-minutes="60" aria-pressed="false">60 min</button>
                 <button type="button" data-minutes="90" aria-pressed="true">90 min</button>
+                <button type="button" data-minutes="120" aria-pressed="false">120 min</button>
             </div>
         </div>
     </div>
-
-    <fieldset class="players-filter">
-        <legend>Days</legend>
-        <div id="busyDays" class="player-checks">
-            {% for name in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] %}
-            <label class="player-check">
-                <input type="checkbox" value="{{ loop.index0 }}" {% if loop.index0 < 4 %}checked{% endif %}>
-                <span>{{ name }}</span>
-            </label>
-            {% endfor %}
-        </div>
-    </fieldset>
 
     <p class="muted small" id="busyStatus" data-enabled="{{ 'true' if enabled else 'false' }}">Loading…</p>
 </section>

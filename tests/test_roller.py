@@ -11,10 +11,12 @@ import json
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 
-from app import roller
+from app import busy, roller
+from app import db as db_mod
 from app.config import BookingsConfig, BookingVenue
 
 FIXTURES = Path(__file__).parent / "fixtures" / "roller"
@@ -57,6 +59,35 @@ def test_a_ninety_minute_window_is_the_lesser_of_its_two_hours(venue):
         if minutes != 90:
             continue
         assert left == min(readings[(start, 60)], readings[(start + timedelta(minutes=30), 60)])
+
+
+@pytest.mark.parametrize("venue", ["activatecoquitlam", "activatelangley"])
+def test_a_two_hour_visit_reads_the_same_however_it_is_split(tmp_path, venue):
+    # Nobody sells 120 minutes, so the forecast joins two back-to-back hours.
+    # Splitting it as 90 + 90 from the start and half an hour later must give
+    # the same busiest moment, at every start where two hours fit.
+    readings = roller.parse_floor(_load(venue), DAY)
+    booked = {(r.start, r.minutes): r.capacity - r.remaining for r in readings}
+    conn = db_mod.connect(tmp_path / "t.db")
+    db_mod.init_schema(conn)
+    read_at = datetime(2026, 11, 4, 8, tzinfo=ZoneInfo("America/Vancouver"))
+    busy.record_day(conn, "v", DAY, readings, observed_at=read_at)
+
+    payload = busy.forecast(conn, "v", now=read_at, tz=read_at.tzinfo)
+
+    i = payload["windows"].index(120)
+    (day,) = payload["days"]
+    joined = {}
+    for step in day["steps"]:
+        start = datetime.combine(DAY, datetime.strptime(step["t"], "%H:%M").time())
+        if step["now"][i] is not None:
+            joined[start] = step["now"][i]
+    later = timedelta(minutes=30)
+    assert joined == {
+        s: max(n, booked[(s + later, 90)])
+        for (s, m), n in booked.items() if m == 90 and (s + later, 90) in booked
+    }
+    assert len(joined) == 41   # 11:00 to 21:00: the last start with two hours before 23:00
 
 
 def test_coquitlam_reads_what_its_start_slots_add_up_to():

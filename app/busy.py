@@ -35,6 +35,14 @@ log = logging.getLogger(__name__)
 
 # The visit lengths the checkout sells, and so the windows worth reading.
 WINDOWS = (60, 90)
+# Lengths it doesn't sell, played as back-to-back sessions of the given size.
+# Each reading is already the worst moment of its own window, so the worst
+# moment of two hours from s is the worse of the hours from s and s+60 — exact,
+# not an estimate: the captures give the same answer split as 90 + 90 from s
+# and s+30, at every start at both venues.
+JOINED = {120: 60}
+# Every visit length the forecast answers for, in payload order.
+LENGTHS = WINDOWS + tuple(JOINED)
 STEP = timedelta(minutes=15)
 
 # A change-only row says what a session had left at some poll; it only says
@@ -350,10 +358,11 @@ def forecast(
 ) -> dict[str, Any]:
     """Per day, every 15-minute arrival's busiest booked moment, now and projected.
 
-    `steps[i].now[j]` / `.exp[j]` is for a visit of `WINDOWS[j]` minutes
-    starting at `steps[i].t`, None where the checkout sells no such visit (a
-    90-minute session can't start half an hour before closing). The page picks
-    the step and window the visitor chose, so changing either never refetches.
+    `steps[i].now[j]` / `.exp[j]` is for a visit of `LENGTHS[j]` minutes
+    starting at `steps[i].t`, None where no such visit fits (a 90-minute
+    session can't start half an hour before closing). A joined length's
+    projection is its busier part's projection. The page picks the step and
+    length the visitor chose, so changing either never refetches.
     """
     today = now.astimezone(tz).date()
     history = load_history(conn, venue, since=today - timedelta(days=HISTORY_DAYS), tz=tz)
@@ -398,8 +407,8 @@ def forecast(
         while at <= starts[-1]:
             steps.append({
                 "t": at.strftime("%H:%M"),
-                "now": [now_n.get((at, w)) for w in WINDOWS],
-                "exp": [_round(exp_n.get((at, w))) for w in WINDOWS],
+                "now": [_visit(now_n, at, w) for w in LENGTHS],
+                "exp": [_round(_visit(exp_n, at, w)) for w in LENGTHS],
             })
             at += STEP
         out_days.append({
@@ -417,7 +426,7 @@ def forecast(
         "now_local": now.astimezone(tz).strftime(_START_FMT),
         "as_of": _utc_stamp(as_of) if as_of else None,
         "as_of_local": as_of.astimezone(tz).strftime(_START_FMT) if as_of else None,
-        "windows": list(WINDOWS),
+        "windows": list(LENGTHS),
         "capacity": capacity,
         "learned_dates": model.learned_dates,
         "days": out_days,
@@ -425,6 +434,16 @@ def forecast(
 
 
 # ---------- helpers ----------
+
+def _visit(by_window: dict[tuple[datetime, int], Any], at: datetime, minutes: int) -> Any:
+    """The reading for a visit of `minutes` from `at`: a sold window's own, or
+    the busiest of the back-to-back windows a joined length is played as."""
+    if minutes in WINDOWS:
+        return by_window.get((at, minutes))
+    part = JOINED[minutes]
+    pieces = [by_window.get((at + timedelta(minutes=k), part)) for k in range(0, minutes, part)]
+    return None if None in pieces else max(pieces)
+
 
 def _round(v: float | None) -> float | None:
     return None if v is None else round(v, 2)

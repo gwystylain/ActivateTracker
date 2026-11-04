@@ -1,10 +1,11 @@
 // /busy — which upcoming evening is quietest at the chosen time.
 //
 // The server sends, per day and per 15-minute arrival, the most people booked
-// onto the floor at any moment of a 60- or a 90-minute visit starting then —
-// booked now, and projected with the late bookings still to come. Everything
-// here is picking numbers out of that, so changing the time, the length or the
-// days never refetches; changing the venue fetches that venue once.
+// onto the floor at any moment of a 60-, 90- or 120-minute visit starting then
+// — booked now, and projected with the late bookings still to come. Everything
+// here is picking numbers out of that for the next seven days, so changing the
+// time or the length never refetches; changing the venue fetches that venue
+// once.
 (() => {
     'use strict';
 
@@ -23,7 +24,6 @@
     const venueSel = $('busyVenue');
     const timeIn = $('busyTime');
     const lengthGroup = $('busyLength');
-    const daysBox = $('busyDays');
     const statusEl = $('busyStatus');
     const card = $('busyCard');
     const answerEl = $('busyAnswer');
@@ -42,14 +42,12 @@
         venue: venueSel.value,
         time: timeIn.value,
         minutes: 90,
-        days: [0, 1, 2, 3],
     };
     try {
         const saved = JSON.parse(localStorage.getItem(STORE) || '{}');
         if ([...venueSel.options].some(o => o.value === saved.venue)) state.venue = saved.venue;
         if (/^\d\d:\d\d$/.test(saved.time || '')) state.time = saved.time;
-        if (saved.minutes === 60 || saved.minutes === 90) state.minutes = saved.minutes;
-        if (Array.isArray(saved.days)) state.days = saved.days.filter(d => d >= 0 && d <= 6);
+        if ([60, 90, 120].includes(saved.minutes)) state.minutes = saved.minutes;
     } catch (e) { /* defaults stand */ }
 
     function save() {
@@ -60,9 +58,6 @@
     timeIn.value = state.time;
     for (const b of lengthGroup.querySelectorAll('button')) {
         b.setAttribute('aria-pressed', String(Number(b.dataset.minutes) === state.minutes));
-    }
-    for (const box of daysBox.querySelectorAll('input')) {
-        box.checked = state.days.includes(Number(box.value));
     }
 
     // ---- time and date helpers ----
@@ -88,7 +83,7 @@
 
     // ---- the numbers ----
     // {now, exp} for a visit of the chosen length arriving at `t`, or null
-    // where the checkout sells no such visit.
+    // where no such visit fits.
     function visitAt(row, t, w) {
         const s = row.steps.get(t);
         if (!s || s.now[w] == null) return null;
@@ -105,7 +100,6 @@
         for (let i = 0; i < 7; i += 1) {
             const date = new Date(today.getTime() + i * 86400000);
             const wd = weekday(date);
-            if (!state.days.includes(wd)) continue;
             const day = byDate.get(date.toISOString().slice(0, 10));
             const row = { iso: isoDay(date), date, wd, offset: i, day, status: 'ok' };
             if (!day) {
@@ -162,14 +156,12 @@
         const quietest = open.filter(r => rounded(r) === least);
         const decided = quietest.length < open.length || open.length === 1;
         answerEl.textContent = '';
-        if (!state.days.length) {
-            answerEl.textContent = 'Pick at least one day.';
-        } else if (!open.length) {
-            answerEl.textContent = `None of the chosen days in the next week has a ${state.minutes}-minute session at ${clock(arrive)}.`;
+        if (!open.length) {
+            answerEl.textContent = `No day in the next week fits a ${state.minutes}-minute visit at ${clock(arrive)}.`;
         } else if (!decided) {
             answerEl.textContent = least === 0
-                ? `Nothing is booked from ${range} on any of these days yet.`
-                : `All of these look about the same: at most around ${people(least)} on the floor at once.`;
+                ? `Nothing is booked from ${range} on any day this week yet.`
+                : `Every day this week looks about the same: at most around ${people(least)} on the floor at once.`;
         } else {
             // Without projections a far-off evening wins just by being far
             // off, so the answer itself says how much it's worth.
@@ -269,7 +261,7 @@
             const why = {
                 nodata: 'No booking data',
                 past: 'Already past',
-                closed: `No ${state.minutes}-minute session at ${clock(opt.arrive)}`,
+                closed: `No ${state.minutes}-minute visit at ${clock(opt.arrive)}`,
             }[r.status];
             value.textContent = '\u2014';
             const msg = document.createElement('span');
@@ -317,7 +309,7 @@
             const v = visitAt(r, t, opt.w);
             if (!v) {
                 cell.classList.add('shut');
-                cell.dataset.tip = `Arriving ${clock(t)}: no ${state.minutes}-minute session`;
+                cell.dataset.tip = `Arriving ${clock(t)}: no ${state.minutes}-minute visit`;
             } else {
                 cell.style.setProperty('--load', String(Math.min(1, v.exp / opt.shade)));
                 const e = Math.round(v.exp);
@@ -430,11 +422,6 @@
         for (const other of lengthGroup.querySelectorAll('button')) {
             other.setAttribute('aria-pressed', String(other === b));
         }
-        save();
-        render();
-    });
-    daysBox.addEventListener('change', () => {
-        state.days = [...daysBox.querySelectorAll('input:checked')].map(b => Number(b.value));
         save();
         render();
     });

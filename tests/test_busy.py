@@ -128,10 +128,11 @@ def test_forecast_tops_up_a_far_off_session_with_late_bookings(tmp_path):
     (step,) = day["steps"]
     assert step["t"] == "18:00"
     # Two booked now, plus the eight its two predecessors gained from here. No
-    # 90-minute window was read, so that slot is empty rather than zero.
-    assert step["now"] == [2, None]
-    assert step["exp"] == [10.0, None]
-    assert payload["windows"] == [60, 90]
+    # 90-minute window was read and there's no 7pm hour to join a 120-minute
+    # visit from, so those slots are empty rather than zero.
+    assert step["now"] == [2, None, None]
+    assert step["exp"] == [10.0, None, None]
+    assert payload["windows"] == [60, 90, 120]
     assert payload["capacity"] == CAP
     assert payload["learned_dates"] == 2
 
@@ -190,7 +191,26 @@ def test_forecast_steps_cover_every_quarter_hour_between_first_and_last_start(tm
     steps = _day(payload, "2026-11-17")["steps"]
     assert [s["t"] for s in steps] == ["17:00", "17:15", "17:30", "17:45", "18:00"]
     # A quarter hour the checkout listed nothing for stays empty.
-    assert steps[1]["now"] == [None, None]
+    assert steps[1]["now"] == [None, None, None]
+
+
+def test_a_two_hour_visit_is_the_busier_of_its_two_hours(tmp_path):
+    conn = _conn(tmp_path)
+    _seed_two_past_tuesdays(conn)
+    read_at = _local(2026, 11, 12, 18)
+    _read(conn, _local(2026, 11, 17, 17), 9, at=read_at)
+    _read(conn, _local(2026, 11, 17, 18), 2, at=read_at)
+
+    payload = busy.forecast(conn, "coquitlam", now=_utc(read_at), tz=TZ)
+
+    steps = {s["t"]: s for s in _day(payload, "2026-11-17")["steps"]}
+    i = payload["windows"].index(120)
+    # Booked now, the 5pm hour is busier; projected, the 6pm hour picks up the
+    # eight its Tuesdays gained and overtakes it. Nothing past 7pm is sold, so
+    # two hours can't start at 6.
+    assert steps["17:00"]["now"][i] == 9
+    assert steps["17:00"]["exp"][i] == 10.0
+    assert steps["18:00"]["now"][i] is None
 
 
 def test_forecast_reports_reads_in_venue_time(tmp_path):

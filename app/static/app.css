@@ -414,7 +414,10 @@ input[type=time]:focus { outline: 2px solid var(--accent); outline-offset: -1px;
 .swatch { display: inline-block; width: 14px; height: 10px; border-radius: 2px; }
 .swatch-now { background: var(--muted); }
 .swatch-more { background: var(--muted); opacity: 0.4; }
-.swatch-strip { background: linear-gradient(90deg, rgba(88, 166, 255, 0.12), rgba(88, 166, 255, 1)); }
+.swatch-strip {
+    background: linear-gradient(90deg,
+        color-mix(in srgb, var(--ok) 55%, transparent), var(--gold), var(--danger));
+}
 
 /* Day | the bar with its strip beneath | the number. The axis row shares the
    grid so its time labels sit over the strips they describe. */
@@ -452,12 +455,22 @@ input[type=time]:focus { outline: 2px solid var(--accent); outline-offset: -1px;
 .busy-bar .seg.end { border-radius: 0 4px 4px 0; }
 .busy-row.quietest .busy-bar .seg { background: var(--accent); }
 
-/* Expected crowd every 15 minutes around the visit: one hue, stronger as it
-   fills. The visit itself is outlined. */
+/* Expected crowd every 15 minutes around the visit, green through gold to red
+   as --load runs 0..1. The quiet half also grows from 55% to full strength, so
+   the scale still reads for anyone who can't tell red from green; it reaches
+   full strength by gold, since a dimmed gold on this background reads as olive.
+   The visit itself is outlined. A browser without color-mix() gets plain
+   green, not nothing. */
 .busy-strip { position: relative; display: grid; gap: 2px; height: 12px; }
 .busy-strip .cell {
+    --to-gold: clamp(0, var(--load, 0) * 2, 1);
+    --to-red: clamp(0, var(--load, 0) * 2 - 1, 1);
     border-radius: 2px;
-    background: rgba(88, 166, 255, calc(0.12 + 0.88 * var(--load, 0)));
+    background: var(--ok);
+    background: color-mix(in srgb,
+        color-mix(in oklch, var(--danger) calc(var(--to-red) * 100%),
+            color-mix(in oklch, var(--gold) calc(var(--to-gold) * 100%), var(--ok)))
+        calc(55% + var(--to-gold) * 45%), transparent);
 }
 .busy-strip .cell.shut { background: transparent; border: 1px dashed var(--border); }
 .busy-strip .cell.chosen { outline: 2px solid var(--text); outline-offset: 1px; }

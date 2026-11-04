@@ -719,11 +719,21 @@ estimate would be the busy ones'. Lead is measured from the day's last *read*, n
 since the booked number is as old as the read. Until there is history the page says "quietest
 so far", because without pickup the furthest-off evening wins just by being far off.
 
+**120 minutes is not sold**, so it is never read: `busy.JOINED` plays it as two back-to-back
+hours, and since each reading is already its window's worst moment, the worse of the hours from
+s and s+60 is exact, not an estimate. Its projection is the busier hour's projection.
+`test_a_two_hour_visit_reads_the_same_however_it_is_split` checks the join against 90 + 90 from
+s and s+30 at every start the captures have. Adding a length the checkout *does* sell means
+adding it to `WINDOWS`, which is what `parse_floor` reads; `JOINED` is only for lengths it doesn't.
+
 `/api/busy-forecast?venue=` sends each upcoming day's readings per 15-minute arrival, now and
-projected, as `[60-minute, 90-minute]` pairs (None where no such visit is sold). `busy.js`
-picks the chosen arrival and length, so changing either never refetches; the bar is scaled to
-the floor's capacity, so its length is how full the place is. `bookings.enabled` is off by
-default, like every leg that leaves playactivate.com.
+projected, as one value per `windows` entry, `[60, 90, 120]` (None where no such visit fits).
+`busy.js` always shows the next seven days and picks the chosen arrival and length out of that,
+so changing either never refetches; the bar is scaled to the floor's capacity, so its length is
+how full the place is. The arrival strip beneath it runs green → gold → red against the busiest
+cell shown (never less than `MIN_SHADE` people), so red means "busiest in view", not "full" —
+the bar is the absolute measure. `bookings.enabled` is off by default, like every leg that
+leaves playactivate.com.
 
 `tests/fixtures/roller/` holds both venues' `product-availability` for 2026-11-04, captured in
 the same minute and gzipped as received (240 KB each otherwise). Numbers pinned against them
