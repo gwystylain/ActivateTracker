@@ -5,7 +5,7 @@
 // — booked now, and projected with the late bookings still to come. Everything
 // here is picking numbers out of that for the next seven days, so changing the
 // time or the length never refetches; changing the venue fetches that venue
-// once.
+// once. Scrolling over a strip, or swiping, moves the arrival time itself.
 (() => {
     'use strict';
 
@@ -15,10 +15,18 @@
     // Arrival times either side of the chosen one in each row's strip: enough
     // to see whether coming half an hour earlier or later would be quieter.
     const CONTEXT = 90;
-    // Strip shades are relative to the busiest cell shown, but never to less
-    // than this many people, so a near-empty week doesn't paint one booked pair
-    // at full strength.
+    // Strip shades are relative to the week's busiest arrival at this length,
+    // so a cell keeps its colour as the strip moves, but never to less than
+    // this many people, so a near-empty week doesn't paint one booked pair at
+    // full strength.
     const MIN_SHADE = 10;
+    // Wheel travel per 15-minute step. A mouse notch is about 100 and moves
+    // exactly one step however far past this it goes; a trackpad sends many
+    // small deltas, which add up to about a cell's width.
+    const WHEEL_STEP = 40;
+    // A wheel that has been scrolling the page keeps doing so until it has
+    // paused this long, so a strip passing under the pointer doesn't catch it.
+    const WHEEL_LATCH_MS = 200;
 
     const $ = id => document.getElementById(id);
     const venueSel = $('busyVenue');
@@ -67,6 +75,7 @@
     };
     // Sessions start on the quarter hour; arriving at 5:50 means the 6:00 one.
     const ceil15 = m => Math.ceil(m / 15) * 15;
+    const hhmm = m => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
     function clock(mins) {
         let h = Math.floor(mins / 60) % 24;
         const m = mins % 60;
@@ -145,6 +154,7 @@
 
         const w = data.windows.indexOf(state.minutes);
         const arrive = ceil15(toMin(state.time));
+        const nowMin = toMin(data.now_local.slice(11, 16));
         const range = `${clock(arrive)} to ${clock(arrive + state.minutes)}`;
         const rows = buildRows(data);
         const open = rows.filter(r => r.status === 'ok');
@@ -177,16 +187,15 @@
         const cells = [];
         for (let t = arrive - CONTEXT; t <= arrive + CONTEXT; t += 15) cells.push(t);
         let shade = MIN_SHADE;
-        for (const r of open) {
-            for (const t of cells) {
-                const v = visitAt(r, t, w);
-                if (v) shade = Math.max(shade, v.exp);
+        for (const r of rows) {
+            for (const [t, s] of r.steps || []) {
+                if (s.exp[w] != null && !(r.offset === 0 && t <= nowMin)) shade = Math.max(shade, s.exp[w]);
             }
         }
 
         renderAxis(cells, arrive);
         const opt = {
-            w, cells, arrive, range, shade,
+            w, cells, arrive, nowMin, range, shade,
             capacity: data.capacity || Math.max(1, ...open.map(r => r.visit.exp)),
         };
         rowsEl.replaceChildren(...rows.map(r => renderRow(r, {
@@ -265,10 +274,14 @@
             }[r.status];
             value.textContent = '\u2014';
             const msg = document.createElement('span');
-            msg.className = 'muted small';
+            msg.className = 'busy-why muted small';
             msg.textContent = why;
             plot.append(msg);
             row.setAttribute('aria-label', `${dayName(r)} ${dateLabel(r)}: ${why}`);
+            // A day with nothing at this arrival still has the rest of its
+            // hours, and this may be the strip being scrolled: it can't vanish
+            // from under the pointer.
+            if (r.steps) plot.append(renderStrip(r, opt));
             row.append(label, plot, value);
             return row;
         }
@@ -299,7 +312,20 @@
             });
         if (segs.length) segs[segs.length - 1].classList.add('end');
         bar.append(...segs);
+        plot.append(bar, renderStrip(r, opt));
 
+        const big = document.createElement('strong');
+        big.textContent = `\u2248 ${expN}`;
+        const detail = document.createElement('span');
+        detail.className = 'muted small';
+        detail.textContent = expN > nowN ? `${nowN} booked, +${expN - nowN} likely` : `${nowN} booked`;
+        value.append(big, detail);
+
+        row.append(label, plot, value);
+        return row;
+    }
+
+    function renderStrip(r, opt) {
         const strip = document.createElement('div');
         strip.className = 'busy-strip';
         strip.style.gridTemplateColumns = `repeat(${opt.cells.length}, 1fr)`;
@@ -307,7 +333,10 @@
             const cell = document.createElement('span');
             cell.className = 'cell';
             const v = visitAt(r, t, opt.w);
-            if (!v) {
+            if (r.offset === 0 && t <= opt.nowMin) {
+                cell.classList.add('shut');
+                cell.dataset.tip = `Arriving ${clock(t)}: already past`;
+            } else if (!v) {
                 cell.classList.add('shut');
                 cell.dataset.tip = `Arriving ${clock(t)}: no ${state.minutes}-minute visit`;
             } else {
@@ -321,17 +350,7 @@
             cell.style.gridColumn = String(i + 1);
             strip.append(cell);
         });
-        plot.append(bar, strip);
-
-        const big = document.createElement('strong');
-        big.textContent = `\u2248 ${expN}`;
-        const detail = document.createElement('span');
-        detail.className = 'muted small';
-        detail.textContent = expN > nowN ? `${nowN} booked, +${expN - nowN} likely` : `${nowN} booked`;
-        value.append(big, detail);
-
-        row.append(label, plot, value);
-        return row;
+        return strip;
     }
 
     // ---- tooltip ----
@@ -373,6 +392,82 @@
     });
     rowsEl.addEventListener('focusout', hideTip);
     window.addEventListener('scroll', hideTip, { passive: true });
+
+    // ---- moving through the day ----
+    // There is one arrival time on the page. A scroll or a swipe changes it and
+    // the bars, the answer and the time box all follow, rather than panning a
+    // strip away from what they describe.
+    function arrivalRange(data) {
+        const w = data.windows.indexOf(state.minutes);
+        const starts = data.days.flatMap(d => d.steps.filter(s => s.now[w] != null).map(s => toMin(s.t)));
+        return starts.length ? { first: Math.min(...starts), last: Math.max(...starts) } : null;
+    }
+
+    function moveArrival(steps) {
+        const data = cache.get(state.venue);
+        const range = data && arrivalRange(data);
+        if (!range) return;
+        const arrive = ceil15(toMin(state.time));
+        const next = Math.min(range.last, Math.max(range.first, arrive + steps * 15));
+        if (next === arrive) return;
+        state.time = hhmm(next);
+        timeIn.value = state.time;
+        save();
+        render();
+    }
+
+    let wheelTravel = 0;
+    let pageWheelAt = -Infinity;
+    rowsEl.addEventListener('wheel', e => {
+        // Ctrl is the browser's zoom, which is also what a trackpad pinch sends.
+        if (e.ctrlKey || !e.target.closest('.busy-strip')) return;
+        if (e.timeStamp - pageWheelAt < WHEEL_LATCH_MS) return;
+        e.preventDefault();
+        // Whichever axis moved more, so a trackpad's sideways swipe counts too.
+        // Firefox reports a mouse wheel in lines, not pixels.
+        const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+        wheelTravel += delta * ([1, 33, 400][e.deltaMode] ?? 1);
+        if (Math.abs(wheelTravel) < WHEEL_STEP) return;
+        moveArrival(Math.sign(wheelTravel));
+        wheelTravel = 0;
+    }, { passive: false });
+    // After the listener above, so it can tell which of the two this one was.
+    window.addEventListener('wheel', e => {
+        if (!e.defaultPrevented) pageWheelAt = e.timeStamp;
+    }, { passive: true });
+
+    // A finger can start anywhere on a row: `touch-action` leaves vertical
+    // swipes to the browser, and a tap never travels a whole cell. A mouse only
+    // drags from the strip, so the text elsewhere stays selectable. Dragging
+    // left moves the strip left, which brings later times in.
+    let swipe = null;
+    rowsEl.addEventListener('pointerdown', e => {
+        if (e.button !== 0) return;
+        if (e.pointerType === 'mouse' && !e.target.closest('.busy-strip')) return;
+        const strip = rowsEl.querySelector('.busy-strip');
+        if (strip) swipe = { id: e.pointerId, x: e.clientX, cell: strip.clientWidth / strip.children.length };
+    });
+    rowsEl.addEventListener('pointermove', e => {
+        if (!swipe || e.pointerId !== swipe.id) return;
+        // A mouse released outside the rows never sent its pointerup here.
+        if (!e.buttons) {
+            swipe = null;
+            return;
+        }
+        const steps = Math.trunc((swipe.x - e.clientX) / swipe.cell);
+        if (!steps) return;
+        swipe.x -= steps * swipe.cell;
+        // Every render replaces the element under the pointer, and events aimed
+        // at a removed element reach nothing, so they are held on the container
+        // first. Not at pointerdown: a tap must still land on what it touched.
+        rowsEl.setPointerCapture(e.pointerId);
+        moveArrival(steps);
+    });
+    for (const type of ['pointerup', 'pointercancel']) {
+        rowsEl.addEventListener(type, e => {
+            if (swipe && e.pointerId === swipe.id) swipe = null;
+        });
+    }
 
     // ---- wiring ----
     async function ensure(venue) {

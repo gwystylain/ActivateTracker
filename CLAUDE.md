@@ -730,10 +730,25 @@ adding it to `WINDOWS`, which is what `parse_floor` reads; `JOINED` is only for 
 projected, as one value per `windows` entry, `[60, 90, 120]` (None where no such visit fits).
 `busy.js` always shows the next seven days and picks the chosen arrival and length out of that,
 so changing either never refetches; the bar is scaled to the floor's capacity, so its length is
-how full the place is. The arrival strip beneath it runs green → gold → red against the busiest
-cell shown (never less than `MIN_SHADE` people), so red means "busiest in view", not "full" —
-the bar is the absolute measure. `bookings.enabled` is off by default, like every leg that
-leaves playactivate.com.
+how full the place is. The arrival strip beneath it runs green → gold → red against the week's
+busiest arrival at that length (never less than `MIN_SHADE` people), so red means "busiest this
+week", not "full" — the bar is the absolute measure. Scaling to the week rather than the cells in
+view is what lets a cell keep its colour as the strip moves. `bookings.enabled` is off by default,
+like every leg that leaves playactivate.com.
+
+**Scrolling over a strip or swiping a row moves the arrival time itself** (`moveArrival`), clamped
+to the first and last arrival any day sells at that length. There is deliberately no separate pan
+offset: the time box, the bars and the answer all follow, so the outlined cell is always the one
+they describe. Three things it depends on:
+
+- A wheel only moves the time when it *starts* on a strip. `WHEEL_LATCH_MS` keeps a wheel that was
+  already scrolling the page doing so while strips pass under the pointer, or the page would stick
+  on the first one it reached.
+- `render` replaces every row, including the element under a finger, and events aimed at a removed
+  element reach nothing — so a swipe captures the pointer on `#busyRows`, which survives. It does
+  that at the first step rather than at pointerdown, so a tap still lands on the bar it touched.
+- A row with nothing at the chosen arrival (past, or no such visit) keeps its strip, or the one
+  being scrolled could vanish mid-gesture. Today's past arrivals draw as shut cells.
 
 `tests/fixtures/roller/` holds both venues' `product-availability` for 2026-11-04, captured in
 the same minute and gzipped as received (240 KB each otherwise). Numbers pinned against them

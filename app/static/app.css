@@ -421,7 +421,9 @@ input[type=time]:focus { outline: 2px solid var(--accent); outline-offset: -1px;
 
 /* Day | the bar with its strip beneath | the number. The axis row shares the
    grid so its time labels sit over the strips they describe. */
-.busy-rows { display: flex; flex-direction: column; }
+/* pan-y: a sideways swipe on a row moves the arrival time (busy.js), an upright
+   one still scrolls the page. */
+.busy-rows { display: flex; flex-direction: column; touch-action: pan-y pinch-zoom; }
 .busy-row, .busy-axis {
     display: grid; grid-template-columns: 8rem minmax(0, 1fr) 9.5rem;
     gap: 4px 16px; align-items: center;
@@ -442,6 +444,7 @@ input[type=time]:focus { outline: 2px solid var(--accent); outline-offset: -1px;
 .busy-row.inactive .busy-day, .busy-row.inactive .busy-value { color: var(--muted); }
 
 .busy-plot { display: flex; flex-direction: column; gap: 6px; }
+.busy-why { line-height: 14px; }   /* the height of the bar it stands in for */
 /* Booked-so-far and expected-late as two segments of one bar, a 2px surface
    gap between them and the data end rounded; the baseline end stays square. */
 .busy-bar {
@@ -461,7 +464,10 @@ input[type=time]:focus { outline: 2px solid var(--accent); outline-offset: -1px;
    full strength by gold, since a dimmed gold on this background reads as olive.
    The visit itself is outlined. A browser without color-mix() gets plain
    green, not nothing. */
-.busy-strip { position: relative; display: grid; gap: 2px; height: 12px; }
+.busy-strip {
+    position: relative; display: grid; gap: 2px; height: 16px;
+    cursor: ew-resize; -webkit-user-select: none; user-select: none;
+}
 .busy-strip .cell {
     --to-gold: clamp(0, var(--load, 0) * 2, 1);
     --to-red: clamp(0, var(--load, 0) * 2 - 1, 1);
