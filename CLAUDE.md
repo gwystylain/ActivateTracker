@@ -736,14 +736,19 @@ week", not "full" — the bar is the absolute measure. Scaling to the week rathe
 view is what lets a cell keep its colour as the strip moves. `bookings.enabled` is off by default,
 like every leg that leaves playactivate.com.
 
-**Scrolling over a strip or swiping a row moves the arrival time itself** (`moveArrival`), clamped
-to the first and last arrival any day sells at that length. There is deliberately no separate pan
-offset: the time box, the bars and the answer all follow, so the outlined cell is always the one
-they describe. Three things it depends on:
+**Scrolling anywhere in the card or swiping a row moves the arrival time itself** (`moveArrival`),
+clamped to the first and last arrival any day sells at that length. There is deliberately no
+separate pan offset: the time box, the bars and the answer all follow, so the outlined cell is
+always the one they describe. A mouse drag starts only from a strip, so text stays selectable.
+Three things it depends on:
 
-- A wheel only moves the time when it *starts* on a strip. `WHEEL_LATCH_MS` keeps a wheel that was
-  already scrolling the page doing so while strips pass under the pointer, or the page would stick
-  on the first one it reached.
+- A wheel only moves the time when it *starts* over the card. `WHEEL_LATCH_MS` keeps a wheel that
+  was already scrolling the page doing so while the card passes under the pointer, or the page
+  would stop dead on reaching it. An uncancellable wheel event counts as the page's too: outside a
+  blocking listener's region Chrome scrolls first and delivers the event afterwards, so its target
+  can be inside the card only because the scroll just put it there. At the day's first or last
+  arrival the wheel falls through to the page (`canMove`): the card fills most of it, so that is
+  the way out for a pointer resting on it.
 - `render` replaces every row, including the element under a finger, and events aimed at a removed
   element reach nothing — so a swipe captures the pointer on `#busyRows`, which survives. It does
   that at the first step rather than at pointerdown, so a tap still lands on the bar it touched.

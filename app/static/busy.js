@@ -5,7 +5,7 @@
 // — booked now, and projected with the late bookings still to come. Everything
 // here is picking numbers out of that for the next seven days, so changing the
 // time or the length never refetches; changing the venue fetches that venue
-// once. Scrolling over a strip, or swiping, moves the arrival time itself.
+// once. Scrolling over the card, or swiping, moves the arrival time itself.
 (() => {
     'use strict';
 
@@ -25,7 +25,7 @@
     // small deltas, which add up to about a cell's width.
     const WHEEL_STEP = 40;
     // A wheel that has been scrolling the page keeps doing so until it has
-    // paused this long, so a strip passing under the pointer doesn't catch it.
+    // paused this long, so the card passing under the pointer doesn't catch it.
     const WHEEL_LATCH_MS = 200;
 
     const $ = id => document.getElementById(id);
@@ -279,7 +279,7 @@
             plot.append(msg);
             row.setAttribute('aria-label', `${dayName(r)} ${dateLabel(r)}: ${why}`);
             // A day with nothing at this arrival still has the rest of its
-            // hours, and this may be the strip being scrolled: it can't vanish
+            // hours, and this may be the strip being dragged: it can't vanish
             // from under the pointer.
             if (r.steps) plot.append(renderStrip(r, opt));
             row.append(label, plot, value);
@@ -416,16 +416,33 @@
         render();
     }
 
+    // Whether the arrival can go any further that way (+1 later, -1 earlier).
+    function canMove(dir) {
+        const data = cache.get(state.venue);
+        const range = data && arrivalRange(data);
+        if (!range) return false;
+        const arrive = ceil15(toMin(state.time));
+        return dir > 0 ? arrive < range.last : dir < 0 && arrive > range.first;
+    }
+
     let wheelTravel = 0;
     let pageWheelAt = -Infinity;
-    rowsEl.addEventListener('wheel', e => {
+    card.addEventListener('wheel', e => {
         // Ctrl is the browser's zoom, which is also what a trackpad pinch sends.
-        if (e.ctrlKey || !e.target.closest('.busy-strip')) return;
-        if (e.timeStamp - pageWheelAt < WHEEL_LATCH_MS) return;
-        e.preventDefault();
+        // An event that can't be cancelled is one the browser has already
+        // scrolled the page with, and which only landed here because that
+        // brought the card under the pointer.
+        if (e.ctrlKey || !e.cancelable || e.timeStamp - pageWheelAt < WHEEL_LATCH_MS) return;
         // Whichever axis moved more, so a trackpad's sideways swipe counts too.
         // Firefox reports a mouse wheel in lines, not pixels.
         const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+        // At the day's first or last arrival the wheel goes back to the page:
+        // the card fills most of it, so this is the way out for a pointer on it.
+        if (!canMove(Math.sign(delta))) {
+            wheelTravel = 0;
+            return;
+        }
+        e.preventDefault();
         wheelTravel += delta * ([1, 33, 400][e.deltaMode] ?? 1);
         if (Math.abs(wheelTravel) < WHEEL_STEP) return;
         moveArrival(Math.sign(wheelTravel));

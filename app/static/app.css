@@ -481,12 +481,16 @@ input[type=time]:focus { outline: 2px solid var(--accent); outline-offset: -1px;
 .busy-strip .cell.shut { background: transparent; border: 1px dashed var(--border); }
 .busy-strip .cell.chosen { outline: 2px solid var(--text); outline-offset: 1px; }
 
-.busy-axis { color: var(--muted); font-size: 0.75em; margin-bottom: 2px; }
-.busy-axis-track { position: relative; height: 1.3em; grid-column: 2; }
-.busy-axis-track span { position: absolute; top: 0; white-space: nowrap; transform: translateX(-50%); }
+/* These times are what you watch while moving through the day, so they are sized
+   to be read, the chosen one most of all. Pinned to the bottom so the two sizes
+   share a baseline, and tabular so they don't jitter as they change. */
+.busy-axis { color: var(--muted); margin-bottom: 4px; font-variant-numeric: tabular-nums; }
+.busy-axis > span:first-child { font-size: 0.75em; align-self: end; }
+.busy-axis-track { position: relative; height: 1.75rem; grid-column: 2; }
+.busy-axis-track span { position: absolute; bottom: 0; line-height: 1; white-space: nowrap; transform: translateX(-50%); }
 .busy-axis-track .edge-start { transform: none; }
 .busy-axis-track .edge-end { transform: translateX(-100%); }
-.busy-axis-track .mark { color: var(--text); }
+.busy-axis-track .mark { color: var(--text); font-size: 1.4rem; font-weight: 600; }
 
 .busy-tip { white-space: pre-line; pointer-events: none; }
 
