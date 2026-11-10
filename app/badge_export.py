@@ -59,6 +59,20 @@ levels — with the people under "The group". Below is every badge we still lack
 beaten. Please plan our next visit so we collect as many of these badges as we \
 can in as few games as we can.
 
+Plan for one continuous session, booked once. Don't suggest splitting the day \
+into several sessions, booking a short extra one, or leaving and coming back, \
+even where a tip describes doing that — a badge that would need it goes under \
+what to leave.
+
+Skip the badges that arrive on their own with enough ordinary play: the ones \
+that only count something up over many visits, such as personal bests beaten, \
+different people played with, games played or won, or levels cleared. We will \
+get those eventually without trying, so don't route around them or list them, \
+though say so in a line if the route happens to finish one. Do plan the badges \
+that never happen by accident, however easy: a streak of different wins at one \
+level, the same level won twice running, a level cleared in a particular way, a \
+rule kept for the whole session. Those are what this plan is for.
+
 What I'd like back:
 
 1. An ordered route: for each game, the room, gamemode and level, which badges \
@@ -68,11 +82,12 @@ the particular way one badge asks for, which is also one of the several \
 different wins another badge wants.
 3. Where badges need games "in a row", say where each streak starts, what is in \
 it, and what would break it.
-4. Badges that run for a whole visit — say what to do from the first game on.
+4. Badges judged over the whole session — say what to do from the first game \
+on, and what the rest of the route must avoid so it isn't spoiled.
 5. Who should play each game when it matters: a badge's player count, or which \
 of us still needs it.
 6. What to leave for another visit and why: too hard for now, needs more \
-players, or can't be done here.
+players, would take a second session, or can't be done here.
 
 Wherever you list badges in a block or table, put a concise description of \
 what each one asks for beside its name, so the plan can be followed without \

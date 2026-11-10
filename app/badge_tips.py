@@ -2,8 +2,9 @@
 
 badge_reference is generated from two community documents and is rebuilt
 whenever they change. This module is the third source, and it is ours: the
-useful core of the Activate Discord's #badges channel (8,540 messages, April
-2024 to October 2026), cut down to methods somebody confirmed by earning the
+useful core of the Activate Discord's #badges channel (9,159 messages, April
+2024 to 9 November 2026; `app.tools.chat_diff` prints what a newer export
+adds), cut down to methods somebody confirmed by earning the
 badge, rulings from Activate staff, and figures people measured. Where advice
 changed over time only the newest survives. It is hand-written and committed,
 the way gen_badge_reference's ESTIMATES are, and it is applied at lookup time by
@@ -18,6 +19,16 @@ document's value outright — used only where the chat shows the document is now
 wrong: Link level 1 stopped costing lives in October 2026, which broke Thumb
 War's recorded method, and Riddle 4.0's recorded answer has its steps in the
 wrong order.
+
+**`UNDOCUMENTED` stands in for the documents where they have no entry yet.**
+The 26 badges of October 2026 arrived after both inputs to badge_reference were
+captured, so their room, gamemode and grade live here until a regenerated
+reference covers them. Unlike a tip, such a field only ever *fills a hole*: once
+the reference says anything for it, the reference is used and the entry here is
+dead weight to delete. Rooms are Activate's own list of the new badges by room
+(staff, 19 October 2026), which agrees with every game the descriptions name.
+Grades are the repo owner's, from playing them, and only the ten he graded have
+one.
 
 Keyed by badge name alone. The one name two badges share, Untouchable 5.0, has
 no entry here; anything said about it would hold for both.
@@ -59,6 +70,15 @@ _WINS = (
     "Shot Clock at about 20 seconds each. Canyon Cross counts only when it says "
     "\"the winner is red\"."
 )
+
+_TRIVIAL_GONE = (
+    "Trivial was retired in early November 2026 (Trivia replaced it) and staff "
+    "removed this badge with it. The badge list may still show it for a while."
+)
+
+# Staff, on the badges that want every player to finish level: they are coded
+# not to award solo.
+_NOT_SOLO = "Needs two or more players: it is not awarded solo (staff)."
 
 TIPS: dict[str, dict[str, Any]] = {
     # ---------- visit badges ----------
@@ -121,12 +141,20 @@ TIPS: dict[str, dict[str, Any]] = {
             "and finish on a time bonus of 184. Link and Match level 1 no longer "
             "cost lives, so the old Link method overshoots."
         ),
-        "tips": ("Rings 1, Undercover and Spellinator also work.",),
+        "tips": (
+            "Rings 1, Undercover and Spellinator also work.",
+            "In Spellinator, lose three lives and enter the last letter with the "
+            "time score on exactly 134: the 1,100 bonus makes 1234. Two counts "
+            "late, at 136, ends on 1236.",
+        ),
     },
     "The Gauntlet": {
         "tips": (
             "Done in Zones, Mega Zones, Simon Says, Odd One Out, Scramble, Spot, "
             "Inside Out, Order Up and Collect.",
+            "Losing lives is fine; only losing a level isn't. Being timed out of "
+            "the room is fine too, and one group finished levels 6-10 in a later "
+            "session the same day, as long as nothing else is played in between.",
         ),
     },
     "The Gauntlet Plus": {
@@ -137,6 +165,8 @@ TIPS: dict[str, dict[str, Any]] = {
             "5, Mines 6, Gauntlet 7, Barrage 8, Zones 9, Mega Zones 10.",
             "Zones loses lives to orange and Mega Zones to purple, so some groups "
             "move them lower. Collect 10 is close to free where Control exists.",
+            "The levels go in order, 1 up to 10; one of each in any order does "
+            "not count.",
         ),
     },
     "The Grand Tour": {
@@ -199,7 +229,13 @@ TIPS: dict[str, dict[str, Any]] = {
     "Starting a Rivalry": {"tips": (_WINS,)},
     "Heating Up": {"tips": (_WINS,)},
     "The Ultimate Winner": {
-        "tips": (_WINS, "Two players can tie competitive Numbers so both get a win."),
+        "tips": (
+            _WINS,
+            "Two players can tie competitive Numbers so both get a win.",
+            "A tie counts as a win for everyone in it (seen in Danger Zones, "
+            "October 2026). The voice has to say \"tie\"; \"game over\" is a "
+            "win for nobody.",
+        ),
     },
     "My Own Competition": {
         "tips": ("Only improving a score you already have counts; first clears don't.",),
@@ -215,6 +251,10 @@ TIPS: dict[str, dict[str, Any]] = {
             "Strategy once memorised. Jigsaw 10 is easier than 8 or 9.",
             "Simon Says 10: one player memorises the first half and shoots, "
             "another the second half.",
+            "It has been done solo: Mines, Relay, Simon Says, Trivial, Order Up, "
+            "Maze, Gauntlet, Statues, Mega Zones, Zones, in that order. Other "
+            "10s people rate soloable: Collect, Runner, Bumper, Barrage, Zap, "
+            "Sneak, and Mega Relay once Tile Relay has trained you.",
         ),
     },
     "Deja Vu Master": {"tips": (_DEJA_VU, "Collect 10 is friendly for this.")},
@@ -304,6 +344,9 @@ TIPS: dict[str, dict[str, Any]] = {
             "finds its big piece first (the small one is the remainder) and "
             "calls the sizes, such as \"3, 4, 7\"; one caller then runs \"3 go, "
             "4 go\". Correct pieces usually appear twice, mirrored.",
+            "The order runs across the whole wave, all six pieces, not within "
+            "each shape. Pieces of the same size can go in either order. Three "
+            "players make it comfortable; two can do it.",
         ),
     },
 
@@ -505,7 +548,9 @@ TIPS: dict[str, dict[str, Any]] = {
             "Score in the flashing basket while it is still flashing. Which "
             "basket flashes is not fixed.",
         ),
+        "watch_out": (_TRIVIAL_GONE,),
     },
+    "Pop Quiz": {"watch_out": (_TRIVIAL_GONE,)},
     "Easter Egg Words": {
         "tips": (
             "Since September 2026 EASTER can come as any word, not only the "
@@ -513,6 +558,204 @@ TIPS: dict[str, dict[str, Any]] = {
             "is coming.",
         ),
         "watch_out": ("Words 7 doesn't trigger it.",),
+    },
+
+    # ---------- the October 2026 badges ----------
+    "Go For Gold": {
+        "watch_out": (
+            "Back in the badge list since 21 October 2026 after a spell switched "
+            "off. Tournament qualifying is yearly, so it can only land once a "
+            "year, and staff accounts can't earn it at all.",
+        ),
+    },
+    "2% Relay": {
+        "tips": (
+            "One turn by one player is enough. Pick a round where your tiles "
+            "make a loop: base, an objective tile on every step, base. No step "
+            "may land on a blank tile, including the way home.",
+            "Level 2 is easier than level 1, since the tiles sit closer together "
+            "and nearer home. It has also been earned on level 3.",
+        ),
+        "watch_out": (
+            "A few players did exactly this and got nothing, at more than one "
+            "location; a miscalibrated tile is the suspicion. Try another round "
+            "or another home square.",
+        ),
+    },
+    "Bumper Stars": {
+        "tips": (
+            "You only have to wait for a teammate to fire before you fire "
+            "again, not for their shot to land.",
+        ),
+    },
+    "Gridlocked": {"tips": ("Any level counts (staff), so do it on level 1.",)},
+    "Home and Back Again": {
+        "tips": (
+            "Only one player has to reach the green safe zone before any blue "
+            "is collected, not the whole group.",
+            "Send your longest jumper: in the third and fourth waves the way to "
+            "green crosses five rows of red.",
+        ),
+    },
+    "Layer by Layer": {
+        "tips": (
+            "Despite the name it is screen by screen: finish scanning one "
+            "screen before touching the next. Losing lives doesn't cost the "
+            "badge, so memorise four, take the mistake, memorise the other four.",
+        ),
+    },
+    "Tic-Tac-Toe": {
+        "tips": (
+            "O or X, as written: any word with an O in it counts. It has been "
+            "earned solo.",
+        ),
+    },
+    "Tri-Fecta": {
+        "tips": (
+            "Done on level 4. You need a wave with three multi-hit targets that "
+            "one mine can reach together, and not every layout has one, so "
+            "replay until it does.",
+        ),
+    },
+    "Real Collectors": {"watch_out": (_NOT_SOLO,)},
+    "Clocking Shots": {
+        "tips": (
+            "Each player's clock only runs between the timer sound and their "
+            "next basket, so everyone shoots ahead of the sound, over and over, "
+            "to keep that gap near zero. 25 each works out to under 0.8 seconds "
+            "of clock per basket.",
+            "Five players is easiest, one basket each. Staff did it with three, "
+            "two of them covering two baskets.",
+        ),
+        "watch_out": (_NOT_SOLO,),
+    },
+    "Scan Fever": {"watch_out": (_NOT_SOLO,)},
+    "Arrondissements": {
+        "tips": (
+            "Everyone in the game gets it, not only the winner, so the rest of "
+            "the group can stand back or help the winner finish each colour.",
+        ),
+    },
+    "Sold Out Crowd": {
+        "tips": (
+            "The floor never fills, so don't try. Clear one coloured square in "
+            "the middle, then stand on a blank tile and get shot so that square "
+            "comes back. That is all it takes; several groups earned it without "
+            "knowing why.",
+        ),
+    },
+    "One Wall at a Time": {
+        "tips": (
+            "It means one face of a wall at a time. A group that cleared whole "
+            "walls got nothing; clearing each side separately earned it.",
+        ),
+        "watch_out": (
+            "If a pipe times out and its replacement lights on a face you have "
+            "already cleared, the badge is lost for that run (staff).",
+        ),
+    },
+    "Last Chance": {
+        "tips": (
+            "\"Section\" in the October 2026 descriptions means a wave, not a "
+            "part of the floor: finish each wave with your last bullet.",
+        ),
+        "watch_out": (
+            "Bugged at launch, so correct runs earned nothing. The fix was "
+            "confirmed in Winnipeg on 1 November 2026 and was due everywhere on "
+            "11 November; a run before that needs redoing.",
+        ),
+    },
+    "Wrong Way": {
+        "tips": ("\"The first section\" is the first wave, by players' reading of a staff clarification.",),
+    },
+    "Vegetable Farmer": {
+        "tips": (
+            "Tomato counts as a vegetable (staff), and pumpkin has counted too.",
+        ),
+    },
+    "Easter Egg Relay": {
+        "watch_out": (
+            "This is Laser Relay's egg, not Hide's Relay, and at launch it was "
+            "attached by mistake to a Laser Relay version no location runs "
+            "(staff, 29 October 2026). Until that is fixed it can't be earned.",
+        ),
+    },
+    "Easter Egg Bullet Train": {
+        "tips": (
+            "A player who found it says it can't be done solo. The community "
+            "master document now links the solution.",
+        ),
+    },
+}
+
+# What the documents would say about a badge they have no entry for yet: where
+# it is played, which gamemode, and how hard it is. `overlay` takes a field from
+# here only when badge_reference has nothing for it. A badge played in a
+# competitive game (Colosseum, Shot Clock, 100, Paris, Mosh Pit) names no
+# gamemode, the same as Snake Island's Tails, and neither does Scan Fever:
+# Scan Rush is not a gamemode master_document knows.
+UNDOCUMENTED: dict[str, dict[str, Any]] = {
+    # Control
+    "Real Collectors": {
+        "rooms": ("Control",), "games": (("Control", "Collect"),), "difficulty": "Medium",
+    },
+    "Bumper Stars": {
+        "rooms": ("Control",), "games": (("Control", "Bumper"),), "difficulty": "Easy",
+    },
+    "Relay Runners": {
+        "rooms": ("Control",), "games": (("Control", "Runner"),), "difficulty": "Medium",
+        "players": "5",
+    },
+    # Grid
+    "Sold Out Crowd": {"rooms": ("Grid",)},
+    "Home and Back Again": {
+        "rooms": ("Grid",), "games": (("Grid", "Flash Mines"),), "difficulty": "Easy",
+    },
+    "2% Relay": {
+        "rooms": ("Grid",), "games": (("Grid", "Tile Relay"),), "difficulty": "Easy",
+    },
+    # Grip
+    "Wrong Way": {"rooms": ("Grip",), "games": (("Grip", "Traverse"),)},
+    "Vegetable Farmer": {"rooms": ("Grip",), "games": (("Grip", "Loop"),)},
+    "Atlas Answers": {"rooms": ("Grip",), "games": (("Grip", "Globe"),)},
+    "Wrong Game": {"rooms": ("Grip",), "games": (("Grip", "Globe"),)},
+    # Hide
+    "Tic-Tac-Toe": {
+        "rooms": ("Hide",), "games": (("Hide", "Spellinator"),), "difficulty": "Easy",
+    },
+    # Hoops
+    "Clocking Shots": {"rooms": ("Hoops",)},
+    # Laser
+    "Scan Fever": {"rooms": ("Laser",)},
+    # Mega Grid
+    "Sharpshot": {"rooms": ("Mega Grid",), "games": (("Mega Grid", "Sharpshooter"),)},
+    "Last Chance": {"rooms": ("Mega Grid",), "games": (("Mega Grid", "Sharpshooter"),)},
+    "Gridlocked": {
+        "rooms": ("Mega Grid",), "games": (("Mega Grid", "Gridlock"),), "difficulty": "Easy",
+    },
+    "Top Half": {"rooms": ("Mega Grid",)},
+    # Mega Laser
+    "Easter Egg Relay": {
+        "rooms": ("Mega Laser",), "games": (("Mega Laser", "Laser Relay"),),
+    },
+    "Easter Egg Zap": {"rooms": ("Mega Laser",), "games": (("Mega Laser", "Zap"),)},
+    # Pipes
+    "One Wall at a Time": {"rooms": ("Pipes",), "games": (("Pipes", "Clockstoppers"),)},
+    # Press
+    "Tri-Fecta": {
+        "rooms": ("Press",), "games": (("Press", "Mines"),), "difficulty": "Easy",
+    },
+    "Joint Pain": {
+        "rooms": ("Press",), "games": (("Press", "Undercover"),), "difficulty": "Easy",
+    },
+    "Easter Egg Bullet Train": {
+        "rooms": ("Press",), "games": (("Press", "Bullet Train"),),
+    },
+    "Arrondissements": {"rooms": ("Press",)},
+    "Final Countdown": {"rooms": ("Press",), "players": "5"},
+    # Scan
+    "Layer by Layer": {
+        "rooms": ("Scan",), "games": (("Scan", "Inside Out"),), "difficulty": "Easy",
     },
 }
 
@@ -522,6 +765,7 @@ for _name in ("Deja Vu", *(f"Deja Vu {_n}.0" for _n in range(2, 10))):
     TIPS[_name] = {"tips": (_DEJA_VU,)}
 
 _BY_NAME = {norm(name): entry for name, entry in TIPS.items()}
+_UNDOCUMENTED = {norm(name): entry for name, entry in UNDOCUMENTED.items()}
 
 
 def overlay(name: str | None, detail: dict[str, Any]) -> dict[str, Any]:
@@ -529,10 +773,12 @@ def overlay(name: str | None, detail: dict[str, Any]) -> dict[str, Any]:
 
     Returns a new dict; `detail` itself is left alone.
     """
-    extra = _BY_NAME.get(norm(name))
-    if not extra:
+    key = norm(name)
+    extra = _BY_NAME.get(key, {})
+    standin = {f: v for f, v in _UNDOCUMENTED.get(key, {}).items() if not detail.get(f)}
+    if not extra and not standin:
         return detail
-    out = dict(detail)
+    out = {**detail, **standin}
     for field, value in extra.items():
         out[field] = tuple(out.get(field) or ()) + value if isinstance(value, tuple) else value
     return out

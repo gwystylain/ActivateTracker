@@ -1,7 +1,7 @@
 import re
 from datetime import date
 
-from app import badge_export
+from app import badge_export, badge_tips
 from app.badge_reference import BADGES, lookup
 
 TODAY = date(2026, 10, 20)
@@ -107,7 +107,7 @@ def test_a_badge_everyone_holds_is_named_nowhere():
 def test_the_brief_names_no_badge_and_says_an_unlisted_one_is_not_wanted():
     """Tips and overlaps still name other badges, held or not, so the brief
     says what a name outside the list means."""
-    for name in {r["name"] for r in BADGES.values()}:
+    for name in {r["name"] for r in BADGES.values()} | set(badge_tips.UNDOCUMENTED):
         assert not re.search(rf"\b{re.escape(name)}\b", badge_export.BRIEF), name
 
     text = _build([TIPTOEING], {"1": {}, "2": {}}, choice=38)
@@ -116,6 +116,17 @@ def test_the_brief_names_no_badge_and_says_an_unlisted_one_is_not_wanted():
             ' done here, so don\'t plan for it.') in text
     anywhere = _build([TIPTOEING], {"1": {}, "2": {}}, choice=None)
     assert "is one all of us already hold, so don't plan for it." in anywhere
+
+
+def test_the_brief_plans_one_session_and_skips_what_comes_with_ordinary_play():
+    """Claude read the visit-badge tips as advice to book a short second
+    session, and spent the route on counters that fill up by themselves."""
+    text = _build([TIPTOEING], {"1": {}, "2": {}})
+
+    assert "Plan for one continuous session, booked once." in text
+    assert "Don't suggest splitting the day into several sessions" in text
+    assert "Skip the badges that arrive on their own with enough ordinary play" in text
+    assert "Do plan the badges that never happen by accident, however easy" in text
 
 
 def test_the_brief_asks_for_each_badge_to_be_described_where_the_plan_lists_it():

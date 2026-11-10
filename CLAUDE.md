@@ -498,8 +498,8 @@ it is the reason the detail is behind a click at all rather than sitting in the 
 
 ### Discord tips are a hand-written layer over badge_reference
 `app/badge_tips.py` is the third source of badge detail, and the only one this repo writes:
-the useful core of the Activate Discord's #badges channel (8,540 messages, April 2024 to
-October 2026), kept to methods someone confirmed by earning the badge, staff rulings and
+the useful core of the Activate Discord's #badges channel (9,159 messages, April 2024 to
+9 November 2026), kept to methods someone confirmed by earning the badge, staff rulings and
 measured figures, newest advice winning. `public._describe_badges` applies it on top of
 `badge_reference.lookup` with `badge_tips.overlay`, so it reaches the page and the Claude
 export alike. It lives outside the generated module on purpose: regenerating
@@ -514,6 +514,24 @@ name through `badge_reference.norm`, and a test fails on any name the reference 
 know. Untouchable 5.0 has no entry because the name is two badges. Tips that apply to a
 family (the visit-long badges, X for X, Deja Vu) are shared constants. When a document
 catches up with a tip here, delete the tip rather than letting the page say it twice.
+
+Each fresh export of the channel repeats everything already read, so
+`python -m app.tools.chat_diff OLD.txt NEW.txt` prints only the messages the newer one adds
+(compared whole, reactions ignored, so an edited message shows up again). Strip the
+attachment URLs before reading the result; they are most of its bulk.
+
+**`badge_tips.UNDOCUMENTED` stands in for the documents where they have no entry at all.**
+Activate added 26 badges on 21 October 2026 (and brought Go For Gold back, 141 in the
+catalog), after both of badge_reference's inputs were captured, so their `rooms`, `games`,
+`players` and `difficulty` live there. Unlike a tip, a stand-in field only *fills a hole*:
+`overlay` takes it only where the reference has nothing, so a regenerated reference that
+covers one of these wins without a fight and the stand-in should then be deleted. Rooms are
+Activate's own by-room list of the new badges, which matches every game the descriptions
+name; a badge in a competitive game (Colosseum, Shot Clock, 100, Paris, Mosh Pit) or in one
+`master_document` doesn't list (Scan Fever's Scan Rush) names no gamemode and is placed by
+room alone. The ten grades are the repo owner's and are shown as plain grades, not starred
+estimates — he has played them; `ESTIMATES` is for this repo's guesses. The other sixteen
+are ungraded on purpose. A test pins the ten.
 
 ### /badges by location: the site's list first, then the gamemode
 `app/badge_locations.py` answers, per badge and per tracked location, whether it can be
@@ -578,6 +596,15 @@ stacking example was The Marathon, it planned around The Marathon for two player
 it. A test checks `BRIEF` against every name in the reference. Tips, notes and "Overlaps with"
 lines still name other badges, held or not, so the brief also says that a badge named anywhere
 but absent from the list is already held by everyone (or can't be done in the chosen scope).
+
+**The brief sets two limits on the plan, both in words rather than by filtering.** One
+continuous session: the visit-long tips mention waiting and "another session", and Claude
+turned that into a recommendation to book a short extra one. And skip the badges that fill
+up with ordinary play (personal bests beaten, people played with, games won, levels
+cleared) while still planning the ones that never happen by accident, however easy — an
+X for X streak is Easy and will not occur on its own. Those are described by kind, since
+the brief names no badge, and they stay in the list below it: the route may still finish
+one, and the brief asks for a line when it does.
 
 It takes the players and the location from the page and **ignores room, difficulty and
 search**: stacking only shows up across rooms and grades, so a filtered export would miss what
