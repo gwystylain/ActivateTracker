@@ -40,6 +40,7 @@
                 <option value="unearned">Not yet earned</option>
                 <option value="earned">Earned</option>
                 <option value="nobody">Nobody has it</option>
+                <option value="favorites">Favorites</option>
             </select>
         </label>
         <label class="inline-field" id="locationField">
@@ -65,7 +66,7 @@
         <div id="playerFilter" class="player-checks"></div>
     </fieldset>
 
-    <p class="muted small" id="badgesStatus">Loading…</p>
+    <p class="muted small" id="badgesStatus"{% if logged_in %} data-csrf="{{ csrf_token }}"{% endif %}>Loading…</p>
 
     <div class="export-row" id="exportRow" hidden>
         <button type="button" id="exportCopy">Copy for Claude</button>

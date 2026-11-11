@@ -235,6 +235,7 @@
             // "Nobody has it" is about the tracked group, so it reads every
             // selected player rather than any one of them.
             if (want === 'nobody') return states.every(st => !st || !st.earned);
+            if (want === 'favorites') return !!b.favorite;
             return true;
         });
     }
@@ -556,12 +557,13 @@
         hideTip();
         const players = activePlayers();
         const badges = sorted(visibleBadges());
-        const cols = 5 + players.length;
+        const cols = 6 + players.length;
 
         // First click sorts the way the column is actually useful: names and
         // rooms A–Z, easiest and fewest-players first, but most stars and — for
         // a player — what they already hold at the top.
         gridHead.replaceChildren(el('tr', null, [
+            el('th', { className: 'fav-col' }, [el('span', { className: 'sr-only', text: 'Favorite' })]),
             headerCell('Badge', 'name', 1),
             headerCell('Room', 'room', 1),
             headerCell('Difficulty', 'difficulty', 1),
@@ -583,6 +585,7 @@
                     'aria-expanded': isOpen ? 'true' : 'false',
                 },
             }, [
+                favCell(b),
                 el('td', null, [
                     el('span', { className: 'toggle', text: '▸', attrs: { 'aria-hidden': 'true' } }),
                     badgeName(b, false),
@@ -605,6 +608,58 @@
             if (isOpen) gridBody.appendChild(detailRow(b, cols));
         }
         gridCard.hidden = players.length === 0;
+    }
+
+    // ---------- favorites ----------
+    //
+    // One shared list, kept on the server so a badge starred here is on the
+    // phone at the venue (/favorites). Only the admin changes it: the template
+    // hands over a CSRF token when logged in, and without one the star is a
+    // mark, not a button. The button sits inside a row that is itself a
+    // button, so its clicks and keys stop here rather than also opening the row.
+    const csrf = statusEl.dataset.csrf || '';
+
+    function favCell(b) {
+        if (!csrf) {
+            return el('td', { className: 'fav-col' }, b.favorite ? [
+                el('span', { className: 'fav-star on', text: '★', attrs: { 'aria-hidden': 'true' } }),
+                el('span', { className: 'sr-only', text: 'Favorite' }),
+            ] : []);
+        }
+        const btn = el('button', {
+            className: 'fav-star' + (b.favorite ? ' on' : ''),
+            text: b.favorite ? '★' : '☆',
+            attrs: {
+                type: 'button',
+                'aria-pressed': b.favorite ? 'true' : 'false',
+                'aria-label': 'Favorite ' + b.name,
+            },
+        });
+        btn.addEventListener('click', e => { e.stopPropagation(); toggleFavorite(b, btn); });
+        btn.addEventListener('keydown', e => e.stopPropagation());
+        return el('td', { className: 'fav-col' }, [btn]);
+    }
+
+    async function toggleFavorite(b, btn) {
+        const want = !b.favorite;
+        btn.disabled = true;
+        let failed = false;
+        try {
+            const resp = await fetch(`/badges/${b.badge_id}/favorite`, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { Accept: 'application/json' },
+                body: new URLSearchParams({ csrf_token: csrf, on: want ? '1' : '0' }),
+            });
+            if (!resp.ok) throw new Error('favorite ' + resp.status);
+            b.favorite = (await resp.json()).favorite;
+        } catch (e) {
+            failed = true;
+        }
+        // Redrawn rather than patched: under the Favorites filter an unstarred
+        // row has to leave.
+        render();
+        if (failed) statusEl.textContent = 'Could not save that favorite. Reload and log in again.';
     }
 
     function roomCell(b) {

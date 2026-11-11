@@ -108,6 +108,17 @@ CREATE TABLE IF NOT EXISTS badges (
     last_seen   TEXT NOT NULL
 );
 
+-- The badges the group has starred to go after next, shown on /favorites. One
+-- shared list rather than one per browser, so a badge starred at a desk is on
+-- the phone at the venue. Deliberately no foreign key to `badges`: a poll that
+-- retires a badge deletes its catalog row, and a star must neither block that
+-- nor be lost if the badge comes back (Go For Gold did). A star whose badge is
+-- gone is simply not listed.
+CREATE TABLE IF NOT EXISTS badge_favorites (
+    badge_id INTEGER PRIMARY KEY,
+    added_at TEXT NOT NULL
+);
+
 -- One row per player per badge they could earn. No location_id: badges transfer
 -- between locations where scores and rank do not, and the site's per-location
 -- lists agree on every badge two locations share.

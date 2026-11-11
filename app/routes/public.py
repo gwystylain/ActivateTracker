@@ -7,8 +7,8 @@ from datetime import date, datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi import APIRouter, Form, Request
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 
 from .. import badge_locations, badge_reference, badge_tips
 from .. import badge_export as badge_export_mod
@@ -16,7 +16,8 @@ from .. import busy as busy_mod
 from .. import catalog as catalog_mod
 from .. import master_document
 from .. import streak as streak_mod
-from ..auth import csrf_token_for, read_session
+from ..auth import csrf_ok, csrf_token_for, read_session
+from ..db import transaction
 
 router = APIRouter()
 
@@ -186,6 +187,68 @@ async def badges(request: Request):
     )
 
 
+@router.get("/favorites", response_class=HTMLResponse)
+async def favorites(request: Request):
+    """The starred badges, as a list short enough to read on a phone at the
+    venue. Server-rendered and script-free: it is a page to glance at between
+    games, so it should be whole the moment it loads."""
+    cfg = request.app.state.config
+    conn = request.app.state.db
+    templates = request.app.state.templates
+    session = read_session(cfg, request.cookies.get(cfg.session.cookie_name))
+
+    payload, _ = _badge_payload(conn)
+    return templates.TemplateResponse(
+        "favorites.html",
+        {
+            "request": request,
+            "groups": _favorite_groups(payload),
+            "logged_in": session is not None,
+            "csrf_token": csrf_token_for(session),
+        },
+    )
+
+
+@router.post("/badges/{badge_id}/favorite")
+async def set_favorite(
+    badge_id: int,
+    request: Request,
+    on: str = Form("1"),
+    csrf_token: str = Form(""),
+):
+    """Star or unstar a badge. The list is shared, so only the admin changes it.
+
+    The token is checked here as well as in CsrfMiddleware, which only reads
+    urlencoded bodies: this route is called by fetch, and a body of any other
+    type would otherwise arrive unchecked.
+    """
+    cfg = request.app.state.config
+    conn = request.app.state.db
+    session = read_session(cfg, request.cookies.get(cfg.session.cookie_name))
+    wants_json = "application/json" in request.headers.get("accept", "")
+    if session is None:
+        if wants_json:
+            return JSONResponse({"error": "log in to change favorites"}, status_code=401)
+        return RedirectResponse("/login", status_code=303)
+    if not csrf_ok(session, csrf_token):
+        return JSONResponse({"error": "CSRF token missing or invalid"}, status_code=403)
+
+    favorite = on not in ("0", "false", "")
+    with transaction(conn):
+        if favorite:
+            if conn.execute("SELECT 1 FROM badges WHERE badge_id = ?", (badge_id,)).fetchone() is None:
+                return JSONResponse({"error": "unknown badge"}, status_code=404)
+            conn.execute(
+                "INSERT OR IGNORE INTO badge_favorites (badge_id, added_at) VALUES (?, ?)",
+                (badge_id, datetime.now(timezone.utc).isoformat(timespec="seconds")),
+            )
+        else:
+            conn.execute("DELETE FROM badge_favorites WHERE badge_id = ?", (badge_id,))
+    if wants_json:
+        return JSONResponse({"badge_id": badge_id, "favorite": favorite})
+    return RedirectResponse("/favorites", status_code=303)
+
+
 @router.get("/busy", response_class=HTMLResponse)
 async def busy_page(request: Request):
     cfg = request.app.state.config
@@ -291,7 +354,9 @@ def _badge_payload(conn) -> tuple[dict[str, Any], list[dict[str, Any]]]:
 
     offers = _location_offers(conn)
     locations = _badge_locations(conn, offers)
+    starred = {r["badge_id"] for r in conn.execute("SELECT badge_id FROM badge_favorites")}
     for badge in catalog:
+        badge["favorite"] = badge["badge_id"] in starred
         # Keyed by location id as a string, the way JSON will key it anyway.
         badge["where"] = {
             str(loc["location_id"]): w
@@ -479,6 +544,58 @@ def _trophy_for(earned: int, possible: int | None) -> dict[str, Any]:
         "next_tier": nxt[0] if nxt else None,
         "to_next": nxt[1] - earned if nxt else None,
     }
+
+
+# The rooms a favorite is filed under when it names none: it can be done in
+# whatever is being played, so it leads the list.
+ANY_ROOM = "Any room"
+
+
+def _favorite_groups(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """The starred badges of a /api/badge-data payload, grouped by room.
+
+    By room because the list is read at the venue, where the question is "what
+    can we do while we are in here". A badge that wants several rooms (The
+    Marathon) or offers a choice of them is filed under all of them joined the
+    way /badges joins them, rather than repeated under each. Each badge carries
+    who still lacks it, which is the other thing the list is read for, and the
+    tracked locations that can't host it.
+    """
+    players = payload["players"]
+    states = payload["states"]
+    loc_names = {str(loc["location_id"]): loc["name"] for loc in payload["locations"]}
+
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for b in payload["badges"]:
+        if not b.get("favorite"):
+            continue
+        bid = str(b["badge_id"])
+        tracked = [p for p in players if bid in states.get(str(p["id"]), {})]
+        needs = [p["display_name"] for p in tracked if not states[str(p["id"])][bid]["earned"]]
+        progress = [
+            f'{p["display_name"]} {st["progress"]}/{st["total_progress"]}'
+            for p in tracked
+            if not (st := states[str(p["id"])][bid])["earned"]
+            and st["total_progress"] > 0 and st["progress"] > 0
+        ]
+        rooms = b.get("rooms") or ()
+        room = (" + " if b.get("rooms_mode") == "all" else " / ").join(rooms) or ANY_ROOM
+        groups[room].append(
+            {
+                **b,
+                "needs": needs,
+                "everyone_needs": bool(needs) and len(needs) == len(tracked) and len(tracked) > 1,
+                "nobody_needs": bool(tracked) and not needs,
+                "progress": progress,
+                "not_at": [
+                    loc_names[loc_id]
+                    for loc_id, w in (b.get("where") or {}).items()
+                    if w.get("status") == "no" and loc_id in loc_names
+                ],
+            }
+        )
+    order = sorted(groups, key=lambda r: (r != ANY_ROOM, r.lower()))
+    return [{"room": room, "badges": groups[room]} for room in order]
 
 
 def _describe_badges(badges: list[dict[str, Any]]) -> list[dict[str, Any]]:

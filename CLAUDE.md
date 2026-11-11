@@ -582,6 +582,30 @@ floor could become the full count if the catalog ever stores them). Per-player l
 location, intersected with the catalog so a count can't exceed its total, and the page
 skips them for a player who already holds the badge.
 
+### Favorite badges: one shared list, starred by the admin
+`badge_favorites` holds the badge ids the group has starred, and `/favorites` lists them. The
+list lives on the server rather than in `localStorage` because it is made at a desk and read
+on a phone at the venue; the price is that it is one list for everybody, so only the admin
+changes it. `/badges` gets a CSRF token in `#badgesStatus[data-csrf]` only when logged in, and
+`badges.js:favCell` draws a star *button* with it and a plain mark without. The button sits in
+its own leading column of a row that is itself `role="button"`, the one place a second control
+is nested in such a row, so its click and keydown stop there rather than also expanding it.
+The Show filter has a **Favorites** value.
+
+`POST /badges/<id>/favorite` (`on=1|0`) answers JSON to the page's fetch and a 303 back to
+`/favorites` to that page's plain Remove form, by `Accept`. It checks the CSRF token itself as
+well as leaving it to `CsrfMiddleware`, which only reads urlencoded bodies. The table has **no
+foreign key** to `badges`: `_retire_badges` deletes a catalog row when upstream drops a badge,
+and a star must neither block that nor be lost if the badge returns (Go For Gold did), so a
+star whose badge is gone is just not listed.
+
+`/favorites` is server-rendered with no script, since it is glanced at between games:
+`public._favorite_groups` files each starred badge under its room ("Any room" first, a
+multi-room badge once under its joined rooms) with who still needs it, any progress Activate
+is counting, and the tracked locations that can't host it. Tips, notes, hints and answers sit
+behind a `<details>`, which is what keeps the list short and the Easter Egg answers a tap
+away rather than on show.
+
 ### /badges export: a brief for Claude, not a data dump
 `GET /badges/export.md?players=<ids>&location=<id|tracked>` (the page's **Copy for Claude** and
 **Download**) is Markdown built by `app/badge_export.py`, a pure module over `_badge_payload`'s

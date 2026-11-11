@@ -2,14 +2,17 @@ import json
 from datetime import date
 from types import SimpleNamespace
 
+from app import auth as auth_mod
 from app import db as db_mod
 from app.routes.public import (
     _build_player_summaries,
     _build_records,
+    _favorite_groups,
     badge_data,
     badge_export,
     chart_data,
     game_data,
+    set_favorite,
 )
 
 TODAY = date(2026, 8, 3)
@@ -1012,3 +1015,125 @@ async def test_badge_data_carries_the_discord_tips_after_the_documents(tmp_path)
 
     assert by_name["Thumb War"]["notes"].startswith("You must lose at least one life")
     assert by_name["Tiptoeing"]["tips"][-1].startswith("After each wave stand still")
+
+
+# ---------- favorite badges ----------
+
+_FAV_CFG = SimpleNamespace(
+    session=SimpleNamespace(cookie_name="atrk", secret_key="k" * 64, max_age_hours=1)
+)
+
+
+def _fav_request(conn, *, logged_in=True, accept="application/json"):
+    cookie, csrf = auth_mod.issue_session(_FAV_CFG, "admin")
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(db=conn, config=_FAV_CFG)),
+        cookies={"atrk": cookie} if logged_in else {},
+        headers={"accept": accept},
+    )
+    return request, csrf
+
+
+async def test_starring_a_badge_marks_it_in_the_payload_and_unstarring_clears_it(tmp_path):
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _seed_badges(conn, pid, (1, False, 0, 0), (2, True, 0, 0))
+    request, csrf = _fav_request(conn)
+
+    resp = await set_favorite(2, request, on="1", csrf_token=csrf)
+    assert json.loads(resp.body) == {"badge_id": 2, "favorite": True}
+    assert {b["badge_id"]: b["favorite"] for b in (await _badges(conn))["badges"]} == {
+        1: False, 2: True}
+
+    await set_favorite(2, request, on="1", csrf_token=csrf)       # twice is still once
+    assert conn.execute("SELECT COUNT(*) FROM badge_favorites").fetchone()[0] == 1
+
+    resp = await set_favorite(2, request, on="0", csrf_token=csrf)
+    assert json.loads(resp.body)["favorite"] is False
+    assert conn.execute("SELECT COUNT(*) FROM badge_favorites").fetchone()[0] == 0
+
+
+async def test_only_the_admin_stars_and_only_with_the_token(tmp_path):
+    """The list is shared, so a visitor can't change it; and the route checks
+    the token itself, because the middleware only reads urlencoded bodies."""
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _seed_badges(conn, pid, (1, False, 0, 0))
+
+    visitor, csrf = _fav_request(conn, logged_in=False)
+    assert (await set_favorite(1, visitor, on="1", csrf_token=csrf)).status_code == 401
+
+    admin, csrf = _fav_request(conn)
+    assert (await set_favorite(1, admin, on="1", csrf_token="wrong")).status_code == 403
+    assert (await set_favorite(99, admin, on="1", csrf_token=csrf)).status_code == 404
+    assert conn.execute("SELECT COUNT(*) FROM badge_favorites").fetchone()[0] == 0
+
+
+async def test_a_form_post_goes_back_to_the_list(tmp_path):
+    """/favorites has no script: its Remove button is a plain form."""
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _seed_badges(conn, pid, (1, False, 0, 0))
+    request, csrf = _fav_request(conn, accept="text/html")
+
+    resp = await set_favorite(1, request, on="1", csrf_token=csrf)
+    assert (resp.status_code, resp.headers["location"]) == (303, "/favorites")
+
+
+async def test_a_star_outlives_its_badge_being_retired(tmp_path):
+    """No foreign key: a poll that drops the catalog row must not be blocked,
+    and the star is simply not listed until the badge is back."""
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _seed_badges(conn, pid, (1, False, 0, 0), (2, False, 0, 0))
+    request, csrf = _fav_request(conn)
+    await set_favorite(1, request, on="1", csrf_token=csrf)
+
+    conn.execute("DELETE FROM player_badges WHERE badge_id = 1")
+    conn.execute("DELETE FROM badges WHERE badge_id = 1")
+
+    assert _favorite_groups((await _badges(conn))) == []
+    assert conn.execute("SELECT COUNT(*) FROM badge_favorites").fetchone()[0] == 1
+
+
+def test_favorites_are_grouped_by_room_and_say_who_still_needs_each():
+    def badge(bid, name, rooms=(), mode="any", fav=True, where=None):
+        return {"badge_id": bid, "name": name, "favorite": fav, "rooms": rooms,
+                "rooms_mode": mode, "where": where or {}}
+
+    payload = {
+        "players": [{"id": 1, "display_name": "Ann"}, {"id": 2, "display_name": "Bo"}],
+        "locations": [{"location_id": 38, "name": "Coquitlam"},
+                      {"location_id": 72, "name": "Langley"}],
+        "badges": [
+            badge(1, "Pipes one", ("Pipes",), where={"38": {"status": "no"}, "72": {"status": "yes"}}),
+            badge(2, "Roomless"),
+            badge(3, "Three rooms", ("Hide", "Mega Grid"), mode="all"),
+            badge(4, "Hide one", ("Hide",)),
+            badge(5, "Not starred", ("Hide",), fav=False),
+        ],
+        "states": {
+            "1": {"1": {"earned": False, "progress": 3, "total_progress": 10},
+                  "2": {"earned": True, "progress": 0, "total_progress": 0},
+                  "3": {"earned": False, "progress": 0, "total_progress": 0},
+                  "4": {"earned": True, "progress": 0, "total_progress": 0}},
+            "2": {"1": {"earned": True, "progress": 0, "total_progress": 0},
+                  "2": {"earned": True, "progress": 0, "total_progress": 0},
+                  "3": {"earned": False, "progress": 0, "total_progress": 0},
+                  "4": {"earned": False, "progress": 0, "total_progress": 0}},
+        },
+    }
+
+    groups = _favorite_groups(payload)
+
+    # "Any room" leads, then rooms A-Z; a badge wanting two rooms is filed once.
+    assert [g["room"] for g in groups] == ["Any room", "Hide", "Hide + Mega Grid", "Pipes"]
+    by_name = {b["name"]: b for g in groups for b in g["badges"]}
+    assert "Not starred" not in by_name
+
+    assert by_name["Pipes one"]["needs"] == ["Ann"]
+    assert by_name["Pipes one"]["progress"] == ["Ann 3/10"]
+    assert by_name["Pipes one"]["not_at"] == ["Coquitlam"]
+    assert by_name["Roomless"]["nobody_needs"] is True
+    assert by_name["Three rooms"]["everyone_needs"] is True
+    assert by_name["Hide one"]["needs"] == ["Bo"]

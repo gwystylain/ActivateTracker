@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Favorites · activateTracker{% endblock %}
+{% block content %}
+<section class="card fav-page">
+    <div class="card-header fav-header">
+        <h1>Favorite badges</h1>
+        <a href="/badges">All badges</a>
+    </div>
+
+    {% if not groups %}
+    <p class="muted">
+        No favorites yet.
+        {% if logged_in %}
+            Star a badge on the <a href="/badges">Badges</a> page and it shows up here.
+        {% else %}
+            <a href="/login">Log in</a> and star a badge on the
+            <a href="/badges">Badges</a> page, and it shows up here.
+        {% endif %}
+    </p>
+    {% endif %}
+
+    {% for group in groups %}
+    <h2 class="fav-room">{{ group.room }}</h2>
+    <ul class="fav-list">
+        {% for b in group.badges %}
+        <li class="fav{% if b.nobody_needs %} fav-done{% endif %}">
+            <div class="fav-head">
+                <strong class="fav-name">{{ b.name }}</strong>
+                {% if b.difficulty %}
+                <span class="diff diff-{{ b.difficulty | lower | replace(' ', '') }}{% if b.difficulty_estimated %} diff-est{% endif %}">{{ b.difficulty }}{% if b.difficulty_estimated %}*{% endif %}</span>
+                {% endif %}
+                {% if b.players and b.players[0].isdigit() %}<span class="muted small">{{ b.players }} players</span>{% endif %}
+                {% if logged_in %}
+                <form method="post" action="/badges/{{ b.badge_id }}/favorite" class="fav-remove">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="on" value="0">
+                    <button type="submit" class="link" aria-label="Remove {{ b.name }} from favorites">Remove</button>
+                </form>
+                {% endif %}
+            </div>
+            <p class="fav-desc">{{ b.description }}</p>
+            <p class="fav-who small">
+                {% if b.nobody_needs %}
+                    <span class="ok">Everyone has it</span>
+                {% elif b.everyone_needs %}
+                    <span class="muted">Needed by</span> everyone
+                {% elif b.needs %}
+                    <span class="muted">Needed by</span> {{ b.needs | join(', ') }}
+                {% endif %}
+                {% if b.progress %}<span class="muted">· {{ b.progress | join(', ') }}</span>{% endif %}
+                {% if b.not_at %}<span class="fav-not">· Not at {{ b.not_at | join(' or ') }}</span>{% endif %}
+            </p>
+            {% if b.notes or b.tips or b.watch_out or b.hint or b.giveaway %}
+            <details class="fav-more">
+                <summary>How</summary>
+                {% if b.notes %}<p>{{ b.notes }}</p>{% endif %}
+                {% for t in b.tips %}<p>{{ t }}</p>{% endfor %}
+                {% for w in b.watch_out %}<p><span class="fav-label">Watch out</span> {{ w }}</p>{% endfor %}
+                {% if b.hint %}<p><span class="fav-label">Hint</span> {{ b.hint }}</p>{% endif %}
+                {% if b.giveaway %}<p><span class="fav-label">Answer</span> {{ b.giveaway }}</p>{% endif %}
+            </details>
+            {% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+    {% endfor %}
+</section>
+{% endblock %}
