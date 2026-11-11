@@ -13,6 +13,9 @@
                 {% for v in venues %}
                 <option value="{{ v.slug }}">{{ v.name }}</option>
                 {% endfor %}
+                {% if venues|length > 1 %}
+                <option value="compare">Compare {{ 'both' if venues|length == 2 else 'all' }}</option>
+                {% endif %}
             </select>
         </label>
         <label class="inline-field">

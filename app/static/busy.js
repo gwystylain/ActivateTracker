@@ -6,6 +6,8 @@
 // here is picking numbers out of that for the next seven days, so changing the
 // time or the length never refetches; changing the venue fetches that venue
 // once. Scrolling over the card, or swiping, moves the arrival time itself.
+// The Location select's Compare option draws every venue side by side, a
+// column each, on one shared scale.
 (() => {
     'use strict';
 
@@ -42,6 +44,11 @@
     const collecting = statusEl.dataset.enabled === 'true';
 
     const cache = new Map();
+    // The select's last option, when there is more than one venue to compare.
+    const COMPARE = 'compare';
+    const venueNames = new Map([...venueSel.options]
+        .filter(o => o.value !== COMPARE).map(o => [o.value, o.textContent.trim()]));
+    const shown = () => (state.venue === COMPARE ? [...venueNames.keys()] : [state.venue]);
 
     // ---- state, remembered per browser ----
     // Blocked storage throws on access, so both directions are wrapped: a
@@ -137,11 +144,12 @@
 
     function render() {
         hideTip();
-        const data = cache.get(state.venue);
-        if (!data) return;
-        const venueName = venueSel.selectedOptions[0]?.textContent || state.venue;
+        const venues = shown().map(slug => ({ slug, name: venueNames.get(slug) || slug, data: cache.get(slug) }));
+        if (venues.some(v => !v.data)) return;
+        const compare = venues.length > 1;
 
-        if (!data.days.length) {
+        if (!venues.some(v => v.data.days.length)) {
+            const venueName = compare ? 'any location' : venues[0].name;
             card.hidden = true;
             statusEl.hidden = false;
             statusEl.textContent = collecting
@@ -151,13 +159,20 @@
         }
         statusEl.hidden = true;
         card.hidden = false;
+        card.classList.toggle('compare', compare);
+        card.style.setProperty('--venues', String(venues.length));
 
-        const w = data.windows.indexOf(state.minutes);
         const arrive = ceil15(toMin(state.time));
-        const nowMin = toMin(data.now_local.slice(11, 16));
         const range = `${clock(arrive)} to ${clock(arrive + state.minutes)}`;
-        const rows = buildRows(data);
+        for (const v of venues) {
+            v.w = v.data.windows.indexOf(state.minutes);
+            v.nowMin = toMin(v.data.now_local.slice(11, 16));
+            v.rows = buildRows(v.data);
+            for (const r of v.rows) r.venue = v;
+        }
+        const rows = venues.flatMap(v => v.rows);
         const open = rows.filter(r => r.status === 'ok');
+        const place = r => (compare ? `${dayName(r)} at ${r.venue.name}` : dayName(r));
 
         // The answer. Ties are by the rounded number, since that's all the
         // page shows: two evenings both reading "about 6" are equally quiet.
@@ -177,7 +192,7 @@
             // off, so the answer itself says how much it's worth.
             const soFar = open.some(r => !r.day.projected) ? ' so far' : '';
             const strong = document.createElement('strong');
-            strong.textContent = quietest.map(dayName).join(' and ');
+            strong.textContent = quietest.map(place).join(' and ');
             answerEl.append(
                 strong,
                 ` ${quietest.length > 1 ? 'look' : 'looks'} quietest${soFar}: at most about ${people(least)} on the floor at once, ${range}.`,
@@ -186,27 +201,42 @@
 
         const cells = [];
         for (let t = arrive - CONTEXT; t <= arrive + CONTEXT; t += 15) cells.push(t);
+        // One colour scale and one bar scale across everything shown, so a
+        // cell or a bar means the same number of people in either column.
         let shade = MIN_SHADE;
         for (const r of rows) {
             for (const [t, s] of r.steps || []) {
-                if (s.exp[w] != null && !(r.offset === 0 && t <= nowMin)) shade = Math.max(shade, s.exp[w]);
+                const e = s.exp[r.venue.w];
+                if (e != null && !(r.offset === 0 && t <= r.venue.nowMin)) shade = Math.max(shade, e);
             }
         }
+        const scale = Math.max(...venues.map(v => v.data.capacity || 0))
+            || Math.max(1, ...open.map(r => r.visit.exp));
+        const optFor = r => ({
+            w: r.venue.w, nowMin: r.venue.nowMin, cells, arrive, range, shade, compare, scale,
+            capacity: r.venue.data.capacity || scale,
+            quiet: decided && quietest.includes(r),
+        });
 
-        renderAxis(cells, arrive);
-        const opt = {
-            w, cells, arrive, nowMin, range, shade,
-            capacity: data.capacity || Math.max(1, ...open.map(r => r.visit.exp)),
-        };
-        rowsEl.replaceChildren(...rows.map(r => renderRow(r, {
-            ...opt, quiet: decided && quietest.includes(r),
-        })));
+        renderAxis(cells, arrive, compare ? venues : null);
+        if (compare) {
+            rowsEl.replaceChildren(...venues[0].rows.map((_, i) => renderCompareRow(
+                venues.map(v => v.rows[i]), optFor,
+            )));
+        } else {
+            rowsEl.replaceChildren(...rows.map(r => renderRow(r, optFor(r))));
+        }
 
         const notes = [];
-        if (data.as_of_local) {
-            const asOf = parseDay(data.as_of_local.slice(0, 10));
-            notes.push(`Bookings as of ${DAYS[weekday(asOf)].slice(0, 3)} ${clock(toMin(data.as_of_local.slice(11, 16)))}`
-                + (data.capacity ? `, on a floor that holds ${data.capacity}.` : '.'));
+        // The oldest read shown, since "as of" is a promise about all of it.
+        const asOfs = venues.map(v => v.data.as_of_local).filter(Boolean).sort();
+        if (asOfs.length) {
+            const asOf = parseDay(asOfs[0].slice(0, 10));
+            const floors = venues.filter(v => v.data.capacity);
+            let floor = '.';
+            if (!compare && floors.length) floor = `, on a floor that holds ${floors[0].data.capacity}.`;
+            else if (floors.length) floor = `. Floors hold ${floors.map(v => `${v.data.capacity} at ${v.name}`).join(', ')}; bars share one scale.`;
+            notes.push(`Bookings as of ${DAYS[weekday(asOf)].slice(0, 3)} ${clock(toMin(asOfs[0].slice(11, 16)))}${floor}`);
         }
         notes.push('Only counts what\u2019s in Activate\u2019s booking system.');
         if (open.some(r => !r.day.projected)) {
@@ -215,7 +245,7 @@
         noteEl.textContent = notes.join(' ');
     }
 
-    function renderAxis(cells, arrive) {
+    function renderAxis(cells, arrive, venues) {
         const n = cells.length;
         const label = (t, cls, left) => {
             const span = document.createElement('span');
@@ -226,31 +256,41 @@
         };
         // Each cell is one arrival time: the chosen one is labelled at its
         // centre, the ends flush with the strip's edges.
-        const track = document.createElement('div');
-        track.className = 'busy-axis-track';
-        track.append(
-            label(cells[0], 'edge-start', '0%'),
-            label(arrive, 'mark', `${((cells.indexOf(arrive) + 0.5) / n) * 100}%`),
-            label(cells[n - 1], 'edge-end', '100%'),
-        );
+        const makeTrack = () => {
+            const track = document.createElement('div');
+            track.className = 'busy-axis-track';
+            track.append(
+                label(cells[0], 'edge-start', '0%'),
+                label(arrive, 'mark', `${((cells.indexOf(arrive) + 0.5) / n) * 100}%`),
+                label(cells[n - 1], 'edge-end', '100%'),
+            );
+            return track;
+        };
         const title = document.createElement('span');
         title.textContent = 'Arriving at';
-        axisEl.replaceChildren(title, track);
+        if (!venues) {
+            axisEl.replaceChildren(title, makeTrack());
+            return;
+        }
+        // Comparing: a column per venue, its name over its own copy of the axis.
+        axisEl.replaceChildren(title, ...venues.map(v => {
+            const col = document.createElement('div');
+            col.className = 'busy-axis-col';
+            const name = document.createElement('strong');
+            name.className = 'busy-venue';
+            name.textContent = v.name;
+            col.append(name, makeTrack());
+            return col;
+        }));
     }
 
-    function renderRow(r, opt) {
-        const row = document.createElement('div');
-        row.className = 'busy-row';
-        row.setAttribute('role', 'listitem');
-        if (opt.quiet) row.classList.add('quietest');
-        if (r.status !== 'ok') row.classList.add('inactive');
-
+    function dayLabel(r, quiet) {
         const label = document.createElement('div');
         label.className = 'busy-day';
         const strong = document.createElement('strong');
         strong.textContent = dayName(r);
         label.append(strong);
-        if (opt.quiet) {
+        if (quiet) {
             const tag = document.createElement('span');
             tag.className = 'busy-tag';
             tag.textContent = 'Quietest';
@@ -260,6 +300,91 @@
         date.className = 'busy-date muted';
         date.textContent = r.offset > 1 ? dateLabel(r) : `${DAYS[r.wd].slice(0, 3)} ${dateLabel(r)}`;
         label.append(date);
+        return label;
+    }
+
+    const whyNot = (r, opt) => ({
+        nodata: 'No booking data',
+        past: 'Already past',
+        closed: `No ${state.minutes}-minute visit at ${clock(opt.arrive)}`,
+    }[r.status]);
+
+    function renderBar(r, opt) {
+        const nowN = Math.round(r.visit.now);
+        const expN = Math.round(r.visit.exp);
+        const tipText = [
+            `${opt.compare ? `${r.venue.name}, ` : ''}${DAYS[r.wd]} ${dateLabel(r)}, ${opt.range}`,
+            `Most on the floor at once, booked so far: ${nowN}`,
+            `Expected by then: ${expN} of ${opt.capacity}`,
+        ].join('\n');
+
+        const bar = document.createElement('div');
+        bar.className = 'busy-bar';
+        bar.tabIndex = 0;
+        bar.dataset.tip = tipText;
+        bar.setAttribute('aria-label', tipText.replace(/\n/g, '. '));
+        // Scaled to the floor's capacity (the largest floor when comparing),
+        // so a bar's length is how full the place is. Zero-width segments are
+        // left out entirely, or the gap between segments would still push the
+        // bar 2px off its baseline.
+        const segs = [['seg-now', r.visit.now], ['seg-more', Math.max(0, r.visit.exp - r.visit.now)]]
+            .filter(([, v]) => v / opt.scale >= 0.005)
+            .map(([cls, v]) => {
+                const seg = document.createElement('span');
+                seg.className = `seg ${cls}`;
+                seg.style.width = `${Math.min(100, (v / opt.scale) * 100)}%`;
+                return seg;
+            });
+        if (segs.length) segs[segs.length - 1].classList.add('end');
+        bar.append(...segs);
+        return bar;
+    }
+
+    // One day, a panel per venue: the bar with its number beside it, the strip
+    // beneath. Narrower than a row of its own, so the detail line and the long
+    // reasons stay in the tooltip.
+    function renderCompareRow(dayRows, optFor) {
+        const row = document.createElement('div');
+        row.className = 'busy-row compare';
+        row.setAttribute('role', 'listitem');
+        row.append(dayLabel(dayRows[0], false));
+        for (const r of dayRows) {
+            const opt = optFor(r);
+            const panel = document.createElement('div');
+            panel.className = 'busy-panel';
+            if (opt.quiet) panel.classList.add('quietest');
+            const top = document.createElement('div');
+            top.className = 'busy-panel-top';
+            const num = document.createElement('strong');
+            if (r.status === 'ok') {
+                num.textContent = `\u2248 ${Math.round(r.visit.exp)}`;
+                top.append(renderBar(r, opt), num);
+            } else {
+                panel.classList.add('inactive');
+                const msg = document.createElement('span');
+                msg.className = 'busy-why muted small';
+                msg.textContent = { nodata: 'No data', past: 'Past', closed: 'No visit' }[r.status];
+                msg.title = whyNot(r, opt);
+                num.textContent = '\u2014';
+                top.append(msg, num);
+            }
+            panel.setAttribute('aria-label', `${r.venue.name}: ${r.status === 'ok'
+                ? `about ${Math.round(r.visit.exp)} on the floor` : whyNot(r, opt)}`);
+            panel.append(top);
+            if (r.steps) panel.append(renderStrip(r, opt));
+            row.append(panel);
+        }
+        return row;
+    }
+
+    function renderRow(r, opt) {
+        const row = document.createElement('div');
+        row.className = 'busy-row';
+        row.setAttribute('role', 'listitem');
+        if (opt.quiet) row.classList.add('quietest');
+        if (r.status !== 'ok') row.classList.add('inactive');
+
+        const label = dayLabel(r, opt.quiet);
 
         const plot = document.createElement('div');
         plot.className = 'busy-plot';
@@ -267,11 +392,7 @@
         value.className = 'busy-value';
 
         if (r.status !== 'ok') {
-            const why = {
-                nodata: 'No booking data',
-                past: 'Already past',
-                closed: `No ${state.minutes}-minute visit at ${clock(opt.arrive)}`,
-            }[r.status];
+            const why = whyNot(r, opt);
             value.textContent = '\u2014';
             const msg = document.createElement('span');
             msg.className = 'busy-why muted small';
@@ -288,31 +409,7 @@
 
         const nowN = Math.round(r.visit.now);
         const expN = Math.round(r.visit.exp);
-        const tipText = [
-            `${DAYS[r.wd]} ${dateLabel(r)}, ${opt.range}`,
-            `Most on the floor at once, booked so far: ${nowN}`,
-            `Expected by then: ${expN} of ${opt.capacity}`,
-        ].join('\n');
-
-        const bar = document.createElement('div');
-        bar.className = 'busy-bar';
-        bar.tabIndex = 0;
-        bar.dataset.tip = tipText;
-        bar.setAttribute('aria-label', tipText.replace(/\n/g, '. '));
-        // Scaled to the floor's capacity, so a bar's length is how full the
-        // place is. Zero-width segments are left out entirely, or the gap
-        // between segments would still push the bar 2px off its baseline.
-        const segs = [['seg-now', r.visit.now], ['seg-more', Math.max(0, r.visit.exp - r.visit.now)]]
-            .filter(([, v]) => v / opt.capacity >= 0.005)
-            .map(([cls, v]) => {
-                const seg = document.createElement('span');
-                seg.className = `seg ${cls}`;
-                seg.style.width = `${Math.min(100, (v / opt.capacity) * 100)}%`;
-                return seg;
-            });
-        if (segs.length) segs[segs.length - 1].classList.add('end');
-        bar.append(...segs);
-        plot.append(bar, renderStrip(r, opt));
+        plot.append(renderBar(r, opt), renderStrip(r, opt));
 
         const big = document.createElement('strong');
         big.textContent = `\u2248 ${expN}`;
@@ -397,15 +494,20 @@
     // There is one arrival time on the page. A scroll or a swipe changes it and
     // the bars, the answer and the time box all follow, rather than panning a
     // strip away from what they describe.
-    function arrivalRange(data) {
-        const w = data.windows.indexOf(state.minutes);
-        const starts = data.days.flatMap(d => d.steps.filter(s => s.now[w] != null).map(s => toMin(s.t)));
+    // Across every venue shown: comparing, the earliest opening and the latest
+    // close bound it, and the other column just reads as shut out there.
+    function arrivalRange() {
+        const starts = shown().flatMap(slug => {
+            const data = cache.get(slug);
+            if (!data) return [];
+            const w = data.windows.indexOf(state.minutes);
+            return data.days.flatMap(d => d.steps.filter(s => s.now[w] != null).map(s => toMin(s.t)));
+        });
         return starts.length ? { first: Math.min(...starts), last: Math.max(...starts) } : null;
     }
 
     function moveArrival(steps) {
-        const data = cache.get(state.venue);
-        const range = data && arrivalRange(data);
+        const range = arrivalRange();
         if (!range) return;
         const arrive = ceil15(toMin(state.time));
         const next = Math.min(range.last, Math.max(range.first, arrive + steps * 15));
@@ -418,8 +520,7 @@
 
     // Whether the arrival can go any further that way (+1 later, -1 earlier).
     function canMove(dir) {
-        const data = cache.get(state.venue);
-        const range = data && arrivalRange(data);
+        const range = arrivalRange();
         if (!range) return false;
         const arrive = ceil15(toMin(state.time));
         return dir > 0 ? arrive < range.last : dir < 0 && arrive > range.first;
@@ -487,17 +588,20 @@
     }
 
     // ---- wiring ----
-    async function ensure(venue) {
-        if (cache.has(venue)) return;
+    async function ensure(venues) {
+        const missing = venues.filter(v => !cache.has(v));
+        if (!missing.length) return;
         statusEl.hidden = false;
         statusEl.textContent = 'Loading\u2026';
         // The previous venue's answer stays up until this one lands, dimmed so
         // it can't be read as this venue's.
         card.classList.add('stale');
         try {
-            const resp = await fetch(`/api/busy-forecast?venue=${encodeURIComponent(venue)}`);
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-            cache.set(venue, await resp.json());
+            await Promise.all(missing.map(async venue => {
+                const resp = await fetch(`/api/busy-forecast?venue=${encodeURIComponent(venue)}`);
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                cache.set(venue, await resp.json());
+            }));
         } catch (e) {
             card.hidden = true;
             statusEl.textContent = 'Couldn\u2019t load the forecast.';
@@ -509,7 +613,7 @@
 
     async function refresh() {
         try {
-            await ensure(state.venue);
+            await ensure(shown());
         } catch (e) {
             return;
         }

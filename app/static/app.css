@@ -494,8 +494,34 @@ input[type=time]:focus { outline: 2px solid var(--accent); outline-offset: -1px;
 
 .busy-tip { white-space: pre-line; pointer-events: none; }
 
+/* Comparing: day | a panel per venue, each the bar with its number beside it
+   and the strip beneath, under the venue's name and its own copy of the axis. */
+#busyCard.compare .busy-axis, .busy-row.compare {
+    grid-template-columns: 7rem repeat(var(--venues, 2), minmax(0, 1fr));
+}
+#busyCard.compare .busy-axis { align-items: end; }
+.busy-axis-col { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.busy-venue { color: var(--text); font-size: 0.95em; }
+.busy-panel { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.busy-panel-top { display: flex; align-items: center; gap: 8px; }
+.busy-panel-top .busy-bar, .busy-panel-top .busy-why { flex: 1; min-width: 0; }
+.busy-panel-top strong { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.busy-panel.quietest .busy-bar .seg { background: var(--accent); }
+.busy-panel.quietest .busy-panel-top strong { color: var(--accent); }
+.busy-panel.inactive .busy-panel-top strong { color: var(--muted); }
+
 @media (max-width: 560px) {
     .busy-row, .busy-axis { grid-template-columns: minmax(0, 1fr) auto; }
+    /* Still side by side on a phone: the day gets a line of its own and the
+       venues share the width. Only the chosen time fits over a column there. */
+    #busyCard.compare .busy-axis, .busy-row.compare {
+        grid-template-columns: repeat(var(--venues, 2), minmax(0, 1fr)); column-gap: 12px;
+    }
+    .busy-row.compare .busy-day { grid-column: 1 / -1; }
+    .busy-row.compare .busy-day .busy-date { display: inline; margin-left: 6px; }
+    #busyCard.compare .busy-axis-track .edge-start,
+    #busyCard.compare .busy-axis-track .edge-end { display: none; }
+    #busyCard.compare .busy-axis-track .mark { font-size: 1.15rem; }
     .busy-row .busy-plot { grid-column: 1 / -1; grid-row: 2; }
     .busy-axis > span:first-child { display: none; }
     .busy-axis-track { grid-column: 1 / -1; }

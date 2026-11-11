@@ -782,6 +782,16 @@ Three things it depends on:
 - A row with nothing at the chosen arrival (past, or no such visit) keeps its strip, or the one
   being scrolled could vanish mid-gesture. Today's past arrivals draw as shut cells.
 
+**Compare is a value of the Location select, not a second page** (`COMPARE`, offered only with
+more than one venue). It fetches every venue and draws a panel per venue in each day's row —
+bar with its number beside it, strip beneath, under the venue's name and its own copy of the
+axis. Both the strip's colour scale and the bar's length share one scale across the venues (the
+largest floor for the bars), so the same colour or length is the same number of people in either
+column; the tooltip still states each venue's own capacity. The answer names the quietest
+*day at venue*, and the arrival range is the union of the venues'. On a phone the columns stay
+side by side: the day label takes a line of its own, only the chosen time fits over a column,
+and the long reasons shrink to "Past" / "No visit" / "No data" with the full text in `title`.
+
 `tests/fixtures/roller/` holds both venues' `product-availability` for 2026-11-04, captured in
 the same minute and gzipped as received (240 KB each otherwise). Numbers pinned against them
 are the capture's, not the venue's — except the capacities and the window rule.
