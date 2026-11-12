@@ -39,17 +39,16 @@
                 {% endif %}
             </div>
             <p class="fav-desc">{{ b.description }}</p>
+            {% if b.nobody_needs or b.some_need or b.progress %}
             <p class="fav-who small">
                 {% if b.nobody_needs %}
                     <span class="ok">Everyone has it</span>
-                {% elif b.everyone_needs %}
-                    <span class="muted">Needed by</span> everyone
-                {% elif b.needs %}
+                {% elif b.some_need %}
                     <span class="muted">Needed by</span> {{ b.needs | join(', ') }}
                 {% endif %}
-                {% if b.progress %}<span class="muted">· {{ b.progress | join(', ') }}</span>{% endif %}
-                {% if b.not_at %}<span class="fav-not">· Not at {{ b.not_at | join(' or ') }}</span>{% endif %}
+                {% if b.progress %}<span class="muted">{% if b.nobody_needs or b.some_need %}· {% endif %}{{ b.progress | join(', ') }}</span>{% endif %}
             </p>
+            {% endif %}
             {% if b.notes or b.tips or b.watch_out or b.hint or b.giveaway %}
             <details class="fav-more">
                 <summary>How</summary>

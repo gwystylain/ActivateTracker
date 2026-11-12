@@ -1133,7 +1133,9 @@ def test_favorites_are_grouped_by_room_and_say_who_still_needs_each():
 
     assert by_name["Pipes one"]["needs"] == ["Ann"]
     assert by_name["Pipes one"]["progress"] == ["Ann 3/10"]
-    assert by_name["Pipes one"]["not_at"] == ["Coquitlam"]
     assert by_name["Roomless"]["nobody_needs"] is True
-    assert by_name["Three rooms"]["everyone_needs"] is True
+    # Needed by everyone is the default reading, so it is not singled out.
+    assert by_name["Three rooms"]["some_need"] is False
+    assert by_name["Pipes one"]["some_need"] is True
+    assert "not_at" not in by_name["Pipes one"]
     assert by_name["Hide one"]["needs"] == ["Bo"]

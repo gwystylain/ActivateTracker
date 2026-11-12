@@ -601,8 +601,10 @@ star whose badge is gone is just not listed.
 
 `/favorites` is server-rendered with no script, since it is glanced at between games:
 `public._favorite_groups` files each starred badge under its room ("Any room" first, a
-multi-room badge once under its joined rooms) with who still needs it, any progress Activate
-is counting, and the tracked locations that can't host it. Tips, notes, hints and answers sit
+multi-room badge once under its joined rooms) with who still needs it and any progress
+Activate is counting. "Needed by" is written only when it singles somebody out — everyone
+needing a badge is the default reading of a wish list — and where a badge can be done is
+left to `/badges`. Tips, notes, hints and answers sit
 behind a `<details>`, which is what keeps the list short and the Easter Egg answers a tap
 away rather than on show.
 

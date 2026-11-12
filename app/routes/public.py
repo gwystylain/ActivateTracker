@@ -558,12 +558,12 @@ def _favorite_groups(payload: dict[str, Any]) -> list[dict[str, Any]]:
     can we do while we are in here". A badge that wants several rooms (The
     Marathon) or offers a choice of them is filed under all of them joined the
     way /badges joins them, rather than repeated under each. Each badge carries
-    who still lacks it, which is the other thing the list is read for, and the
-    tracked locations that can't host it.
+    who still lacks it, which is the other thing the list is read for. Where a
+    badge can be done is left to /badges: a star is put on a badge the group
+    means to go and get, so the list doesn't argue with it.
     """
     players = payload["players"]
     states = payload["states"]
-    loc_names = {str(loc["location_id"]): loc["name"] for loc in payload["locations"]}
 
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for b in payload["badges"]:
@@ -584,14 +584,11 @@ def _favorite_groups(payload: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 **b,
                 "needs": needs,
-                "everyone_needs": bool(needs) and len(needs) == len(tracked) and len(tracked) > 1,
+                # Only worth a line when it singles somebody out: "everyone"
+                # is the default reading of a badge on a shared wish list.
+                "some_need": bool(needs) and len(needs) < len(tracked),
                 "nobody_needs": bool(tracked) and not needs,
                 "progress": progress,
-                "not_at": [
-                    loc_names[loc_id]
-                    for loc_id, w in (b.get("where") or {}).items()
-                    if w.get("status") == "no" and loc_id in loc_names
-                ],
             }
         )
     order = sorted(groups, key=lambda r: (r != ANY_ROOM, r.lower()))
