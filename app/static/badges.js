@@ -724,46 +724,6 @@
         return !w || w.status !== 'no';
     }
 
-    // Where a badge can be done, across every tracked location whatever the
-    // filter says: the filter decides what is listed, this says where else.
-    // The server checks the gamemode as well as the room, so the reason can be
-    // that a room is there but runs something else — Langley's Laser room runs
-    // Chopper, and Steady Stream wants Photon Rush.
-    function whereText(b) {
-        const answers = data.locations
-            .map(loc => ({ loc, w: (b.where || {})[loc.location_id] }))
-            .filter(a => a.w);
-        if (!answers.length) return null;        // roomless, or nothing catalogued
-        const yes = answers.filter(a => a.w.status === 'yes');
-        const no = answers.filter(a => a.w.status === 'no');
-        const unknown = answers.filter(a => a.w.status === 'unknown');
-        if (yes.length === answers.length) return 'All your locations';
-        if (yes.length) {
-            return joinAnd(yes.map(a => a.loc.name)) + ' only — ' + reasons([...no, ...unknown]);
-        }
-        if (unknown.length) return "Can't tell — " + unknown[0].w.why;
-        return (earnedByAnyone(b)
-            // Evidence beats inference: somebody holds it, so it was done at
-            // a building we don't track.
-            ? 'Earned already, so somewhere else — not at your tracked locations. '
-            : 'Not at your tracked locations. ') + reasons(no);
-    }
-
-    // "Coquitlam and Langley: no Climb room", rather than the same reason twice.
-    function reasons(answers) {
-        const groups = new Map();
-        for (const a of answers) {
-            if (!groups.has(a.w.why)) groups.set(a.w.why, []);
-            groups.get(a.w.why).push(a.loc.name);
-        }
-        return [...groups].map(([why, names]) => joinAnd(names) + ': ' + why).join('; ');
-    }
-
-    function joinAnd(items) {
-        if (items.length <= 1) return items.join('');
-        return items.slice(0, -1).join(', ') + ' and ' + items[items.length - 1];
-    }
-
     // What a badge looks like in a particular building — Riddle 7.0's S games,
     // the level count behind Activated. Only the chosen location's when there
     // is one; every tracked location's otherwise.
@@ -798,8 +758,6 @@
     function detailRow(b, cols) {
         const bits = [];
 
-        const where = whereText(b);
-        if (where) bits.push(field('Where', where));
         bits.push(...factLines(b));
         if (b.level) bits.push(field('Level', b.level));
         if (b.overlapping) bits.push(field('Overlaps with', b.overlapping));

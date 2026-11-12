@@ -567,8 +567,8 @@ and a badge earned elsewhere can't be done there. **Any of my locations** (shown
 more than one tracked location; it replaced a checkbox, and a saved tick migrates to it)
 is the weaker claim, so it keeps the older rule: a badge somebody already holds is never
 hidden, because badges transfer between locations — `Row By Row` (Climb, at neither tracked
-location) is earned all the same, which is also why the **Where** line words that case as
-"earned already, so somewhere else" rather than "you can't get this". Choosing a location
+location) is earned all the same. The detail panel has no **Where** line: the Location
+filter has already answered that question for everything listed. Choosing a location
 narrows the Room filter to rooms doable there and limits the detail panel's facts to it;
 a room the catalog can't see (the photo room) is offered there whenever a badge needing it
 is answered `yes` or `unknown`.
