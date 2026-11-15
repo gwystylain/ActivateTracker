@@ -261,8 +261,6 @@
             const m = /\d+/.exec(b.players || '');
             return m ? Number(m[0]) : null;
         }
-        if (key === 'stars') return typeof b.stars === 'number' ? b.stars : null;
-
         if (key.startsWith('p:')) return playerRank(Number(key.slice(2)), b);
         return null;
     }
@@ -557,18 +555,17 @@
         hideTip();
         const players = activePlayers();
         const badges = sorted(visibleBadges());
-        const cols = 6 + players.length;
+        const cols = 5 + players.length;
 
         // First click sorts the way the column is actually useful: names and
-        // rooms A–Z, easiest and fewest-players first, but most stars and — for
-        // a player — what they already hold at the top.
+        // rooms A–Z, easiest and fewest-players first, but — for a player —
+        // what they already hold at the top.
         gridHead.replaceChildren(el('tr', null, [
             el('th', { className: 'fav-col' }, [el('span', { className: 'sr-only', text: 'Favorite' })]),
             headerCell('Badge', 'name', 1),
             headerCell('Room', 'room', 1),
             headerCell('Difficulty', 'difficulty', 1),
             headerCell('Players', 'players', 1),
-            headerCell('Stars', 'stars', -1),
             ...players.map(p => headerCell(p.display_name, 'p:' + p.id, -1)),
         ]));
 
@@ -593,7 +590,6 @@
                 roomCell(b),
                 el('td', null, [difficultyChip(b)]),
                 el('td', { className: 'muted small', text: b.players || '—' }),
-                el('td', { className: 'muted small', text: b.stars ? String(b.stars) : '—' }),
                 ...players.map(p => cell(stateOf(p.id, b.badge_id))),
             ]);
 
@@ -1038,11 +1034,13 @@
 
         const savedSort = load('sort', null);
         if (savedSort && (savedSort.dir === 1 || savedSort.dir === -1)) {
-            // A sort by a player who is no longer tracked has no column to
-            // point at, so it falls back to the API's order rather than
-            // silently ranking everything equal.
-            const stillThere = !String(savedSort.key).startsWith('p:')
-                || known.has(Number(String(savedSort.key).slice(2)));
+            // A sort by a player who is no longer tracked, or by a column that
+            // has since gone (Stars), has no header to point at, so it falls
+            // back to the API's order rather than silently ranking by nothing.
+            const key = String(savedSort.key);
+            const stillThere = key.startsWith('p:')
+                ? known.has(Number(key.slice(2)))
+                : ['name', 'room', 'difficulty', 'players'].includes(key);
             if (stillThere) sort = { key: savedSort.key, dir: savedSort.dir };
         }
 
