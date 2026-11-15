@@ -28,6 +28,10 @@ CREATE TABLE IF NOT EXISTS score_snapshots (
     player_id       INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
     location_id     INTEGER NOT NULL,
     polled_at       TEXT NOT NULL,
+    -- The day of play this poll's scores describe (streak.poll_day): the day
+    -- before for the scheduled poll, the same local day for a manual one.
+    -- NULL on rows from before the column; read with streak.snapshot_day.
+    activity_date   TEXT,
     total_score     INTEGER NOT NULL,
     yearly_score    INTEGER NOT NULL,
     player_rank     INTEGER,   -- playerLocation.playerRank, the page's "RANK"
@@ -220,6 +224,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     ):
         if col not in snap_cols:
             conn.execute(f"ALTER TABLE score_snapshots ADD COLUMN {col} INTEGER")
+    if "activity_date" not in snap_cols:
+        conn.execute("ALTER TABLE score_snapshots ADD COLUMN activity_date TEXT")
 
     badge_cols = {r["name"] for r in conn.execute("PRAGMA table_info(player_badges)")}
     if "progress_at" not in badge_cols:

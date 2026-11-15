@@ -6,7 +6,8 @@ import json
 import logging
 import random
 import sqlite3
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Iterable
 
 from apscheduler.triggers.cron import CronTrigger
@@ -22,6 +23,19 @@ from .db import transaction
 log = logging.getLogger(__name__)
 
 _poll_lock = asyncio.Lock()
+
+#: When the newest score poll started and finished (UTC), and whether it was
+#: started by hand. In memory: the public Refresh button's cooldown reads it,
+#: and a restart forgetting it costs at most one early refresh.
+last_poll: dict[str, datetime | bool | None] = {
+    "started_at": None,
+    "finished_at": None,
+    "manual": False,
+}
+
+
+def poll_running() -> bool:
+    return _poll_lock.locked()
 
 # What a failed request to playactivate.com looks like. Anything else escaping
 # a fetch is a bug, and is left to propagate.
@@ -149,6 +163,8 @@ async def poll_all(
     *,
     force_catalog: bool = False,
     badge_cfg: BadgeConfig | None = None,
+    manual: bool = False,
+    now: datetime | None = None,
 ) -> dict[str, int]:
     """Poll every tracked (player, location). Returns counters for logging.
 
@@ -170,229 +186,255 @@ async def poll_all(
     it changed. Normally the walk is throttled to score changes (see
     `catalog.needs_refresh`) — but that also means the locations' *top* scores
     only get re-read when one of our own players moves. Other people at the
-    venue keep setting new ones, so the admin page offers this as an explicit
-    override.
+    venue keep setting new ones, so the nightly scheduled poll passes it:
+    one room walk a day keeps the top scores current, while the public Refresh
+    button stays throttled.
+
+    `manual` says somebody pressed Refresh rather than the scheduler firing,
+    which changes the day the scores are credited to — see `streak.poll_day`.
+    The day is fixed once, at the start, so one poll can't straddle midnight
+    and split its visits across two days.
     """
     if _poll_lock.locked():
         log.info("poll_all skipped: another poll is in progress")
         return {"skipped": 1}
 
     async with _poll_lock:
-        rows = conn.execute(
-            """
-            SELECT p.id          AS player_id,
-                   p.handle      AS handle,
-                   pl.location_id AS location_id
-            FROM players p
-            JOIN player_locations pl ON pl.player_id = p.id
-            ORDER BY p.id, pl.location_id
-            """
-        ).fetchall()
+        now = now or datetime.now(timezone.utc)
+        day = streak.poll_day(now, manual=manual, tz=ZoneInfo(poll_cfg.timezone))
+        last_poll.update(started_at=now, finished_at=None, manual=manual)
+        try:
+            return await _poll_locked(
+                conn, poll_cfg, day=day, force_catalog=force_catalog, badge_cfg=badge_cfg
+            )
+        finally:
+            last_poll["finished_at"] = datetime.now(timezone.utc)
 
-        counters = {
-            "polled": 0,
-            "errors": 0,
-            "visits_inserted": 0,
-            "snapshots": 0,
-            "location_errors": 0,
-            "catalog_locations": 0,
-            "catalog_rooms": 0,
-            "catalog_errors": 0,
-            "badges_fetched": 0,
-            "badges_newly_earned": 0,
-            "badges_errors": 0,
-            "badges_skipped": 0,
-            "badges_retired": 0,
-        }
-        if not rows:
-            return counters
 
-        jitter_lo, jitter_hi = poll_cfg.jitter_seconds
-        first_request = True
+async def _poll_locked(
+    conn: sqlite3.Connection,
+    poll_cfg: PollConfig,
+    *,
+    day: date,
+    force_catalog: bool,
+    badge_cfg: BadgeConfig | None,
+) -> dict[str, int]:
+    rows = conn.execute(
+        """
+        SELECT p.id          AS player_id,
+               p.handle      AS handle,
+               pl.location_id AS location_id
+        FROM players p
+        JOIN player_locations pl ON pl.player_id = p.id
+        ORDER BY p.id, pl.location_id
+        """
+    ).fetchall()
 
-        async def pace() -> None:
-            nonlocal first_request
-            if not first_request:
-                await asyncio.sleep(random.uniform(jitter_lo, jitter_hi))
-            first_request = False
+    counters = {
+        "polled": 0,
+        "errors": 0,
+        "visits_inserted": 0,
+        "snapshots": 0,
+        "location_errors": 0,
+        "catalog_locations": 0,
+        "catalog_rooms": 0,
+        "catalog_errors": 0,
+        "badges_fetched": 0,
+        "badges_newly_earned": 0,
+        "badges_errors": 0,
+        "badges_skipped": 0,
+        "badges_retired": 0,
+    }
+    if not rows:
+        return counters
 
-        timeout = poll_cfg.request_timeout_sec
-        proxy_on = badge_cfg is not None and badge_cfg.enabled
+    jitter_lo, jitter_hi = poll_cfg.jitter_seconds
+    first_request = True
 
-        async with AsyncSession() as session:
-            # ---- 1. locations ----
-            locations: dict[int, scraper.LocationInfo] = {}
-            for location_id in sorted({r["location_id"] for r in rows}):
+    async def pace() -> None:
+        nonlocal first_request
+        if not first_request:
+            await asyncio.sleep(random.uniform(jitter_lo, jitter_hi))
+        first_request = False
+
+    timeout = poll_cfg.request_timeout_sec
+    proxy_on = badge_cfg is not None and badge_cfg.enabled
+
+    async with AsyncSession() as session:
+        # ---- 1. locations ----
+        locations: dict[int, scraper.LocationInfo] = {}
+        for location_id in sorted({r["location_id"] for r in rows}):
+            await pace()
+            try:
+                locations[location_id] = await scraper.fetch_location(
+                    location_id, session=session, timeout=timeout
+                )
+            except _FETCH_FAILURES as e:
+                # Scores still poll without it; they just carry no level
+                # count, and the catalog isn't walked this time.
+                counters["location_errors"] += 1
+                log.warning("location fetch failed location=%s err=%s", location_id, e)
+
+        # ---- 2. scores and the site's badges ----
+        profiles: dict[str, dict | None] = {}
+        # Sticky per location: any player's score rising there is enough to
+        # re-read its rooms, and several players at one location still cost
+        # one walk.
+        changed: dict[int, bool] = {}
+        seen_players: dict[int, list[str]] = {}
+        site_badges: dict[int, list[list[scraper.BadgeState]]] = {}
+        site_failed: dict[int, int] = {}
+        # Each location's offer, from whichever handles' badge lists landed.
+        offers: dict[int, set[int]] = {}
+
+        for row in rows:
+            player_id = row["player_id"]
+            location_id = row["location_id"]
+            handles = parse_handles(row["handle"])
+            seen_players.setdefault(player_id, handles)
+            site_badges.setdefault(player_id, [])
+            info = locations.get(location_id)
+
+            results: list[scraper.ScrapeResult] = []
+            for handle in handles:
+                if handle not in profiles:
+                    await pace()
+                    try:
+                        profiles[handle] = await scraper.fetch_profile(
+                            handle, session=session, timeout=timeout
+                        )
+                    except _FETCH_FAILURES as e:
+                        # Most often a handle the site doesn't know, which
+                        # 404s on every endpoint — so not retried per
+                        # location, only counted.
+                        profiles[handle] = None
+                        log.warning("profile fetch failed handle=%s err=%s", handle, e)
+                if profiles[handle] is None:
+                    counters["errors"] += 1
+                    site_failed[player_id] = site_failed.get(player_id, 0) + 1
+                    continue
+
                 await pace()
                 try:
-                    locations[location_id] = await scraper.fetch_location(
-                        location_id, session=session, timeout=timeout
+                    results.append(
+                        await scraper.fetch(
+                            handle,
+                            location_id,
+                            session=session,
+                            timeout=timeout,
+                            profile=profiles[handle],
+                            level_count=info.level_count if info else None,
+                        )
                     )
                 except _FETCH_FAILURES as e:
-                    # Scores still poll without it; they just carry no level
-                    # count, and the catalog isn't walked this time.
-                    counters["location_errors"] += 1
-                    log.warning("location fetch failed location=%s err=%s", location_id, e)
-
-            # ---- 2. scores and the site's badges ----
-            profiles: dict[str, dict | None] = {}
-            # Sticky per location: any player's score rising there is enough to
-            # re-read its rooms, and several players at one location still cost
-            # one walk.
-            changed: dict[int, bool] = {}
-            seen_players: dict[int, list[str]] = {}
-            site_badges: dict[int, list[list[scraper.BadgeState]]] = {}
-            site_failed: dict[int, int] = {}
-            # Each location's offer, from whichever handles' badge lists landed.
-            offers: dict[int, set[int]] = {}
-
-            for row in rows:
-                player_id = row["player_id"]
-                location_id = row["location_id"]
-                handles = parse_handles(row["handle"])
-                seen_players.setdefault(player_id, handles)
-                site_badges.setdefault(player_id, [])
-                info = locations.get(location_id)
-
-                results: list[scraper.ScrapeResult] = []
-                for handle in handles:
-                    if handle not in profiles:
-                        await pace()
-                        try:
-                            profiles[handle] = await scraper.fetch_profile(
-                                handle, session=session, timeout=timeout
-                            )
-                        except _FETCH_FAILURES as e:
-                            # Most often a handle the site doesn't know, which
-                            # 404s on every endpoint — so not retried per
-                            # location, only counted.
-                            profiles[handle] = None
-                            log.warning("profile fetch failed handle=%s err=%s", handle, e)
-                    if profiles[handle] is None:
-                        counters["errors"] += 1
-                        site_failed[player_id] = site_failed.get(player_id, 0) + 1
-                        continue
-
-                    await pace()
-                    try:
-                        results.append(
-                            await scraper.fetch(
-                                handle,
-                                location_id,
-                                session=session,
-                                timeout=timeout,
-                                profile=profiles[handle],
-                                level_count=info.level_count if info else None,
-                            )
-                        )
-                    except _FETCH_FAILURES as e:
-                        counters["errors"] += 1
-                        site_failed[player_id] = site_failed.get(player_id, 0) + 1
-                        log.warning(
-                            "poll failed handle=%s location=%s err=%s",
-                            handle, location_id, e,
-                        )
-                        continue
-
-                    await pace()
-                    try:
-                        states = await scraper.fetch_player_badges(
-                            handle, location_id, session=session, timeout=timeout
-                        )
-                        site_badges[player_id].append(states)
-                        offers.setdefault(location_id, set()).update(
-                            s.badge_id for s in states
-                        )
-                    except _FETCH_FAILURES as e:
-                        counters["badges_errors"] += 1
-                        site_failed[player_id] = site_failed.get(player_id, 0) + 1
-                        log.warning(
-                            "badge fetch failed handle=%s location=%s err=%s",
-                            handle, location_id, e,
-                        )
-
-                if not results:
-                    continue
-
-                combined = scraper.combine_results(results)
-                inserted_visit = persist_snapshot(conn, player_id, combined)
-                counters["polled"] += 1
-                counters["snapshots"] += 1
-                if inserted_visit:
-                    counters["visits_inserted"] += 1
-                changed[location_id] = changed.get(location_id, False) or inserted_visit
-
-            for location_id, badge_ids in offers.items():
-                persist_location_badges(conn, location_id, badge_ids)
-
-            # ---- 3. the proxy, for progress and stars ----
-            proxy_badges: dict[int, list[list[scraper.BadgeState]]] = {}
-            proxy_failed: dict[int, int] = {}
-            if proxy_on:
-                badge_lo, badge_hi = badge_cfg.spacing_seconds
-                first_badge = True
-                for player_id, handles in badge_order(conn, seen_players):
-                    proxy_badges[player_id] = []
-                    for handle in handles:
-                        if not first_badge:
-                            await asyncio.sleep(random.uniform(badge_lo, badge_hi))
-                        first_badge = False
-                        try:
-                            proxy_badges[player_id].append(
-                                await fetch_badges_with_retry(
-                                    handle,
-                                    session=session,
-                                    badge_cfg=badge_cfg,
-                                    timeout=timeout,
-                                )
-                            )
-                        except Exception as e:
-                            # Somebody else's server: the least reliable leg of
-                            # the poll, and it must never take the scores down —
-                            # those are already committed.
-                            proxy_failed[player_id] = proxy_failed.get(player_id, 0) + 1
-                            counters["badges_errors"] += 1
-                            log.warning("badge proxy failed handle=%s err=%s", handle, e)
-
-            for player_id in seen_players:
-                _write_badges(
-                    conn,
-                    player_id,
-                    site=site_badges.get(player_id, []),
-                    site_whole=not site_failed.get(player_id),
-                    proxy=proxy_badges.get(player_id, []),
-                    proxy_whole=proxy_on and not proxy_failed.get(player_id),
-                    proxy_on=proxy_on,
-                    counters=counters,
-                )
-
-            # ---- 4. the catalog ----
-            for location_id, info in locations.items():
-                if not info.rooms:
-                    continue  # nothing to walk — the location lists no rooms
-                if not force_catalog and not catalog_mod.needs_refresh(
-                    conn,
-                    location_id,
-                    expected_levels=info.coop_levels,
-                    score_changed=changed.get(location_id, False),
-                ):
-                    continue
-                try:
-                    got = await catalog_mod.refresh_location(
-                        conn, session, info=info, poll_cfg=poll_cfg
+                    counters["errors"] += 1
+                    site_failed[player_id] = site_failed.get(player_id, 0) + 1
+                    log.warning(
+                        "poll failed handle=%s location=%s err=%s",
+                        handle, location_id, e,
                     )
-                except Exception:
-                    # A catalog problem must never take the score poll down —
-                    # the scores are already committed by this point.
-                    counters["catalog_errors"] += 1
-                    log.exception("catalog refresh failed location=%s", location_id)
                     continue
-                counters["catalog_locations"] += 1
-                counters["catalog_rooms"] += got["rooms"]
-                counters["catalog_errors"] += got["errors"]
 
-        log.info("poll_all done: %s", counters)
-        return counters
+                await pace()
+                try:
+                    states = await scraper.fetch_player_badges(
+                        handle, location_id, session=session, timeout=timeout
+                    )
+                    site_badges[player_id].append(states)
+                    offers.setdefault(location_id, set()).update(
+                        s.badge_id for s in states
+                    )
+                except _FETCH_FAILURES as e:
+                    counters["badges_errors"] += 1
+                    site_failed[player_id] = site_failed.get(player_id, 0) + 1
+                    log.warning(
+                        "badge fetch failed handle=%s location=%s err=%s",
+                        handle, location_id, e,
+                    )
+
+            if not results:
+                continue
+
+            combined = scraper.combine_results(results)
+            inserted_visit = persist_snapshot(conn, player_id, combined, day=day)
+            counters["polled"] += 1
+            counters["snapshots"] += 1
+            if inserted_visit:
+                counters["visits_inserted"] += 1
+            changed[location_id] = changed.get(location_id, False) or inserted_visit
+
+        for location_id, badge_ids in offers.items():
+            persist_location_badges(conn, location_id, badge_ids)
+
+        # ---- 3. the proxy, for progress and stars ----
+        proxy_badges: dict[int, list[list[scraper.BadgeState]]] = {}
+        proxy_failed: dict[int, int] = {}
+        if proxy_on:
+            badge_lo, badge_hi = badge_cfg.spacing_seconds
+            first_badge = True
+            for player_id, handles in badge_order(conn, seen_players):
+                proxy_badges[player_id] = []
+                for handle in handles:
+                    if not first_badge:
+                        await asyncio.sleep(random.uniform(badge_lo, badge_hi))
+                    first_badge = False
+                    try:
+                        proxy_badges[player_id].append(
+                            await fetch_badges_with_retry(
+                                handle,
+                                session=session,
+                                badge_cfg=badge_cfg,
+                                timeout=timeout,
+                            )
+                        )
+                    except Exception as e:
+                        # Somebody else's server: the least reliable leg of
+                        # the poll, and it must never take the scores down —
+                        # those are already committed.
+                        proxy_failed[player_id] = proxy_failed.get(player_id, 0) + 1
+                        counters["badges_errors"] += 1
+                        log.warning("badge proxy failed handle=%s err=%s", handle, e)
+
+        for player_id in seen_players:
+            _write_badges(
+                conn,
+                player_id,
+                site=site_badges.get(player_id, []),
+                site_whole=not site_failed.get(player_id),
+                proxy=proxy_badges.get(player_id, []),
+                proxy_whole=proxy_on and not proxy_failed.get(player_id),
+                proxy_on=proxy_on,
+                counters=counters,
+                day=day,
+            )
+
+        # ---- 4. the catalog ----
+        for location_id, info in locations.items():
+            if not info.rooms:
+                continue  # nothing to walk — the location lists no rooms
+            if not force_catalog and not catalog_mod.needs_refresh(
+                conn,
+                location_id,
+                expected_levels=info.coop_levels,
+                score_changed=changed.get(location_id, False),
+            ):
+                continue
+            try:
+                got = await catalog_mod.refresh_location(
+                    conn, session, info=info, poll_cfg=poll_cfg
+                )
+            except Exception:
+                # A catalog problem must never take the score poll down —
+                # the scores are already committed by this point.
+                counters["catalog_errors"] += 1
+                log.exception("catalog refresh failed location=%s", location_id)
+                continue
+            counters["catalog_locations"] += 1
+            counters["catalog_rooms"] += got["rooms"]
+            counters["catalog_errors"] += got["errors"]
+
+    log.info("poll_all done: %s", counters)
+    return counters
 
 
 def _write_badges(
@@ -405,6 +447,7 @@ def _write_badges(
     proxy_whole: bool,
     proxy_on: bool,
     counters: dict[str, int],
+    day: date | None = None,
 ) -> None:
     """Persist one player's badges from whichever sources answered in full.
 
@@ -436,6 +479,7 @@ def _write_badges(
             player_id,
             scraper.combine_badges(lists),
             retire=use_proxy or (use_site and not proxy_on),
+            day=day,
         )
     except Exception:
         counters["badges_errors"] += 1
@@ -473,16 +517,20 @@ def persist_snapshot(
     result: scraper.ScrapeResult,
     *,
     now: datetime | None = None,
+    day: date | None = None,
 ) -> bool:
     """Insert snapshot. If totalScore went up vs last snapshot, also insert a visit.
 
     Returns True iff a visit was inserted. The visit is dated to the day the
     play actually happened rather than the day we noticed — `streak.activity_day`
     owns that rule, shared with the chart's x-axis so the two can't drift.
+    `day` overrides it — `poll_all` passes `streak.poll_day`, which credits a
+    manual refresh to the same day — and is stored on the snapshot as
+    `activity_date`, so the chart and record dates read the same day back.
     """
     now = now or datetime.now(timezone.utc)
     polled_at = now.isoformat(timespec="seconds")
-    visit_date = streak.activity_day(now).isoformat()
+    visit_date = (day or streak.activity_day(now)).isoformat()
 
     with transaction(conn):
         prior = conn.execute(
@@ -499,16 +547,18 @@ def persist_snapshot(
         conn.execute(
             """
             INSERT INTO score_snapshots
-                (player_id, location_id, polled_at, total_score, yearly_score,
+                (player_id, location_id, polled_at, activity_date,
+                 total_score, yearly_score,
                  player_rank, leaderboard_position, yearly_rank, stars, coins,
                  levels_beat, level_count, badges_earned, badges_possible,
                  raw_scores_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 player_id,
                 result.location_id,
                 polled_at,
+                visit_date,
                 result.total_score,
                 result.yearly_score,
                 # Two different numbers, both per location: the page's "RANK"
@@ -548,6 +598,7 @@ def persist_badges(
     *,
     now: datetime | None = None,
     retire: bool = True,
+    day: date | None = None,
 ) -> dict[str, int]:
     """Upsert one player's badges. Returns counts for logging.
 
@@ -562,8 +613,9 @@ def persist_badges(
     `earned_on` is stamped only on an observed false→true transition, and dated
     `streak.activity_day` — the same one-day backdate the visit rows get, for the
     same reason: Activate's data refreshes about a day late, so a badge first
-    seen earned in today's poll was earned yesterday. Sharing that helper is what
-    stops a badge and the visit from the same session disagreeing about the date.
+    seen earned in today's poll was earned yesterday. `poll_all` passes the same
+    `day` to both, which is what stops a badge and the visit from the same
+    session disagreeing about the date — manual refreshes included.
 
     On a player's *first* poll there is no transition to observe — everything
     already earned was earned at some unknown past date, so it is left NULL
@@ -571,7 +623,7 @@ def persist_badges(
     """
     now = now or datetime.now(timezone.utc)
     updated_at = now.isoformat(timespec="seconds")
-    earned_day = streak.activity_day(now).isoformat()
+    earned_day = (day or streak.activity_day(now)).isoformat()
 
     newly_earned = 0
     with transaction(conn):

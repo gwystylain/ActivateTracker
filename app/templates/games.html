@@ -14,12 +14,6 @@
                     {% endfor %}
                 </select>
             </label>
-            {% if logged_in %}
-                <form method="post" action="/admin/refresh" class="inline">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <button type="submit">Refresh now</button>
-                </form>
-            {% endif %}
         </div>
     </div>
 

@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections import defaultdict
 from datetime import date, datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, BackgroundTasks, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 
 from .. import badge_locations, badge_reference, badge_tips
@@ -15,9 +16,12 @@ from .. import badge_export as badge_export_mod
 from .. import busy as busy_mod
 from .. import catalog as catalog_mod
 from .. import master_document
+from .. import poller
 from .. import streak as streak_mod
 from ..auth import csrf_ok, csrf_token_for, read_session
 from ..db import transaction
+
+log = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -48,7 +52,94 @@ async def index(request: Request):
             "logged_in": session is not None,
             "csrf_token": csrf_token_for(session),
             "history_years": [today.year - i for i in range(4)],
+            "refresh": _refresh_state(request),
         },
+    )
+
+
+# ---------- public refresh ----------
+
+#: When the button last started a poll. Set before the poll is even scheduled,
+#: so two presses in the same instant can't both get past the cooldown.
+_refresh_requested_at: datetime | None = None
+
+
+def _last_refresh(conn) -> datetime | None:
+    """When scores were last fetched: the newest poll this process ran or
+    queued, else the newest snapshot — which is what survives a restart."""
+    seen = [poller.last_poll["started_at"], _refresh_requested_at]
+    row = conn.execute("SELECT MAX(polled_at) AS t FROM score_snapshots").fetchone()
+    if row and row["t"]:
+        seen.append(datetime.fromisoformat(row["t"]))
+    seen = [t if t.tzinfo else t.replace(tzinfo=timezone.utc) for t in seen if t]
+    return max(seen) if seen else None
+
+
+def _when_label(when: datetime, now: datetime, tz: ZoneInfo) -> str:
+    local, today = when.astimezone(tz), now.astimezone(tz).date()
+    clock = local.strftime("%I:%M %p").lstrip("0").lower()
+    if local.date() == today:
+        return f"today at {clock}"
+    if (today - local.date()).days == 1:
+        return f"yesterday at {clock}"
+    return f"{local.strftime('%b')} {local.day} at {clock}"
+
+
+def _refresh_state(request: Request, now: datetime | None = None) -> dict[str, Any]:
+    cfg = request.app.state.config
+    now = now or datetime.now(timezone.utc)
+    last = _last_refresh(request.app.state.db)
+    remaining = 0
+    if last is not None:
+        remaining = max(0, int(cfg.poll.manual_cooldown_seconds - (now - last).total_seconds()))
+    return {
+        "running": poller.poll_running(),
+        "cooldown_remaining": remaining,
+        "last_label": _when_label(last, now, ZoneInfo(cfg.poll.timezone)) if last else None,
+    }
+
+
+@router.get("/api/refresh-status")
+async def refresh_status(request: Request) -> JSONResponse:
+    return JSONResponse(_refresh_state(request), headers={"Cache-Control": "no-store"})
+
+
+@router.post("/refresh")
+async def public_refresh(request: Request, background: BackgroundTasks) -> JSONResponse:
+    """Poll every player now, from the front page's button. Open to anyone.
+
+    A manual poll credits its scores to *today* (`streak.poll_day`) where the
+    nightly one credits yesterday: nobody presses Refresh at 4am. The catalog
+    walk stays throttled to score changes — the nightly poll forces it.
+
+    The cooldown counts from the last poll of either kind, so it protects
+    playactivate.com from the button however the last one started. Logged-in
+    callers' CSRF tokens are checked by CsrfMiddleware; an anonymous POST from
+    another site can at worst spend the cooldown, which anyone could anyway.
+    """
+    global _refresh_requested_at
+    cfg = request.app.state.config
+    conn = request.app.state.db
+    state = _refresh_state(request)
+    if state["running"] or state["cooldown_remaining"] > 0:
+        wait = max(state["cooldown_remaining"], 1)
+        return JSONResponse(
+            {**state, "started": False},
+            status_code=429,
+            headers={"Retry-After": str(wait)},
+        )
+
+    _refresh_requested_at = datetime.now(timezone.utc)
+
+    async def run():
+        try:
+            await poller.poll_all(conn, cfg.poll, badge_cfg=cfg.badges, manual=True)
+        except Exception:
+            log.exception("manual poll failed")
+
+    background.add_task(run)
+    return JSONResponse(
+        {**_refresh_state(request), "running": True, "started": True}, status_code=202
     )
 
 
@@ -62,6 +153,7 @@ async def chart_data(request: Request) -> JSONResponse:
                s.player_id        AS player_id,
                s.location_id      AS location_id,
                s.polled_at        AS polled_at,
+               s.activity_date    AS activity_date,
                s.total_score      AS total_score
         FROM score_snapshots s
         JOIN players p ON p.id = s.player_id
@@ -93,8 +185,9 @@ async def chart_data(request: Request) -> JSONResponse:
         handle_to_player_id[handle] = r["player_id"]
         # The day of *play*, not the day of the poll — the site's scores lag by
         # ~1 day, so an x-axis of raw poll dates puts every point a day late
-        # (and a day away from the visit dates the dashboard counts).
-        day = streak_mod.activity_day(r["polled_at"]).isoformat()
+        # (and a day away from the visit dates the dashboard counts). A manual
+        # refresh records its own same-day date, which snapshot_day prefers.
+        day = streak_mod.snapshot_day(r["polled_at"], r["activity_date"]).isoformat()
         per_handle_per_day_per_loc[handle][day][r["location_id"]] = r["total_score"]
 
     payload: list[dict[str, Any]] = []
@@ -865,8 +958,8 @@ def _record_dates(
 
     Activate banks only the best-ever run, so a level's stored high is
     monotonic: the day the record was set is the first snapshot in which it
-    reached its current value. Dated with `streak.activity_day` for the same
-    reason the visit rows are — the poll sees yesterday's play.
+    reached its current value. Dated with `streak.snapshot_day`, the day the
+    visit rows got — yesterday for the nightly poll, today for a manual one.
 
     A level already at its current value in the player's *earliest* snapshot
     has no observed transition: it was set at some unknown point before
@@ -881,7 +974,7 @@ def _record_dates(
     out: dict[tuple[int, int], str] = {}
     cur = conn.execute(
         """
-        SELECT polled_at, raw_scores_json
+        SELECT polled_at, activity_date, raw_scores_json
         FROM score_snapshots
         WHERE player_id = ? AND location_id = ?
         ORDER BY polled_at, id
@@ -895,7 +988,9 @@ def _record_dates(
         for key in [k for k, target in pending.items() if beaten.get(k, 0) >= target]:
             del pending[key]
             if i:  # the first snapshot is "already held", not a transition
-                out[key] = streak_mod.activity_day(row["polled_at"]).isoformat()
+                out[key] = streak_mod.snapshot_day(
+                    row["polled_at"], row["activity_date"]
+                ).isoformat()
     return out
 
 

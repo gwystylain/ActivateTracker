@@ -1,12 +1,12 @@
-"""Authenticated admin routes: manage players, trigger refresh."""
+"""Authenticated admin routes: manage players."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Form, HTTPException, Request
+from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from .. import auth, busy, poller
+from .. import auth
 from ..db import transaction
 from ..poller import format_handles, parse_handles
 
@@ -56,7 +56,6 @@ async def admin_home(request: Request):
             ],
             "csrf_token": auth.csrf_token_for(session),
             "username": session.get("u"),
-            "bookings_enabled": request.app.state.config.bookings.enabled,
         },
     )
 
@@ -257,57 +256,6 @@ async def delete_player(player_id: int, request: Request):
     with transaction(conn):
         conn.execute("DELETE FROM players WHERE id = ?", (player_id,))
     return RedirectResponse("/admin", status_code=303)
-
-
-@router.post("/admin/refresh")
-async def manual_refresh(request: Request, background: BackgroundTasks):
-    _require_session(request)
-    cfg = request.app.state.config
-    conn = request.app.state.db
-
-    async def run():
-        await poller.poll_all(conn, cfg.poll, badge_cfg=cfg.badges)
-
-    background.add_task(run)
-    return RedirectResponse("/admin?refreshed=1", status_code=303)
-
-
-@router.post("/admin/refresh-catalog")
-async def manual_catalog_refresh(request: Request, background: BackgroundTasks):
-    """Poll scores *and* force a re-walk of every location's rooms.
-
-    The ordinary refresh only re-reads a location's rooms when that location's
-    score moved, so the game catalog and the venue's top scores can sit stale
-    through any number of quiet polls. This is the override. It costs one
-    request per room per location, so it's a separate button rather than the
-    default.
-    """
-    _require_session(request)
-    cfg = request.app.state.config
-    conn = request.app.state.db
-
-    async def run():
-        await poller.poll_all(
-            conn, cfg.poll, force_catalog=True, badge_cfg=cfg.badges
-        )
-
-    background.add_task(run)
-    return RedirectResponse("/admin?refreshed=catalog", status_code=303)
-
-
-@router.post("/admin/refresh-bookings")
-async def manual_bookings_refresh(request: Request, background: BackgroundTasks):
-    _require_session(request)
-    cfg = request.app.state.config
-    conn = request.app.state.db
-    if not cfg.bookings.enabled:
-        raise HTTPException(400, "bookings.enabled is false in config.yaml")
-
-    async def run():
-        await busy.poll_bookings(conn, cfg.bookings)
-
-    background.add_task(run)
-    return RedirectResponse("/admin?refreshed=bookings", status_code=303)
 
 
 # ---------- helpers ----------

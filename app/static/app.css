@@ -112,6 +112,8 @@ table.player-summary tr.loc-row td.loc-name { padding-left: 32px; }
 /* Chart metric switch: two buttons acting as one control, the pressed one
    filled the way a primary button is. */
 .header-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.refresh-box { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+#refreshBtn:disabled { opacity: .6; cursor: default; font-variant-numeric: tabular-nums; }
 .segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
 .segmented button {
     background: transparent; color: var(--muted); border: 0; border-radius: 0;

@@ -1,3 +1,88 @@
+// Public Refresh button. The server enforces the cooldown; this only mirrors
+// it, so a stale page that guesses wrong just gets a 429 and the real wait.
+(function () {
+    const box = document.getElementById('refreshBox');
+    if (!box) return;
+    const btn = document.getElementById('refreshBtn');
+    const status = document.getElementById('refreshStatus');
+    const idle = status.textContent;
+    let readyAt = Date.now() + (Number(box.dataset.cooldown) || 0) * 1000;
+    let timer = null;
+
+    function clock(ms) {
+        const s = Math.ceil(ms / 1000);
+        return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+    }
+
+    function tick() {
+        const left = readyAt - Date.now();
+        if (left > 0) {
+            btn.disabled = true;
+            btn.textContent = 'Refresh in ' + clock(left);
+            timer = setTimeout(tick, 1000);
+        } else {
+            btn.disabled = false;
+            btn.textContent = 'Refresh scores';
+            timer = null;
+        }
+    }
+
+    function applyState(st) {
+        readyAt = Date.now() + (st.cooldown_remaining || 0) * 1000;
+        if (timer) clearTimeout(timer);
+        tick();
+    }
+
+    // While a poll runs, ask every few seconds; reload once it's done so the
+    // chart and tables show what it found.
+    async function watch() {
+        btn.disabled = true;
+        btn.textContent = 'Refreshing…';
+        status.textContent = 'Fetching scores — the page reloads when done.';
+        for (;;) {
+            await new Promise(r => setTimeout(r, 4000));
+            let st;
+            try {
+                const resp = await fetch('/api/refresh-status', { credentials: 'same-origin' });
+                st = await resp.json();
+            } catch (e) {
+                continue;
+            }
+            if (!st.running) {
+                location.reload();
+                return;
+            }
+        }
+    }
+
+    btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        let resp, st;
+        try {
+            resp = await fetch('/refresh', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: new URLSearchParams({ csrf_token: box.dataset.csrf || '' }),
+            });
+            st = await resp.json();
+        } catch (e) {
+            status.textContent = 'Couldn’t reach the server.';
+            btn.disabled = false;
+            return;
+        }
+        if (resp.ok || st.running) {
+            watch();
+            return;
+        }
+        status.textContent = idle;
+        applyState(st);
+    });
+
+    if (box.dataset.running === '1') watch();
+    else tick();
+})();
+
 // Collapsible per-player breakdown rows on the dashboard summary table.
 (function () {
     function toggle(row) {

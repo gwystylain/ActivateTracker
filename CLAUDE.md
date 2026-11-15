@@ -35,10 +35,23 @@ headers gets `403 Forbidden`; only TLS-impersonating clients work. The scraper h
 ### Visit detection from score deltas (no visit API)
 playactivate.com exposes scores but not visit timestamps. The poller infers visits by comparing
 `total_score` of each new snapshot against the most recent prior snapshot for the same
-`(player_id, location_id)`. A strictly-greater value inserts one row in `visits` dated
-`streak.activity_day(polled_at)` — the day *before* the poll, because playactivate's scores
-refresh ~1 day late: play on May 14 first shows up in the May 15 poll. That helper is the single
-home of the rule; the chart's x-axis uses it too, so a point and its visit can't disagree.
+`(player_id, location_id)`. A strictly-greater value inserts one row in `visits` dated to the
+poll's *play day*, `streak.poll_day`, which depends on who started the poll:
+
+- **Scheduled** (`poll.hour_utc`, ~3–4am Pacific): `streak.activity_day(polled_at)`, the day
+  *before* — nobody plays at 4am, so what it sees is yesterday's play. Play on May 14 first
+  shows up in the May 15 poll.
+- **Manual** (the front page's Refresh button): the *same* day, in `poll.timezone`'s local date —
+  somebody pressing Refresh almost always played that day. Local, not UTC: 8pm in Vancouver is
+  already tomorrow in UTC.
+
+`poll_all` fixes the day once at its start and passes it to `persist_snapshot` and
+`persist_badges` alike, and the snapshot stores it as `score_snapshots.activity_date`. Readers go
+through `streak.snapshot_day(polled_at, activity_date)`, which prefers the stored date and falls
+back to `activity_day(polled_at)` for rows from before the column (all of which were scheduled or
+admin polls). The chart's x-axis and the record dates read it, so a point, its visit and its
+badges can't disagree. A manual poll and the next night's scheduled one credit the same day, so
+an evening refresh followed by the 4am poll yields one visit day, not two.
 Multi-location increases on the same calendar day are deduped to one visit by `streak.summarize`,
 which is what Activate's per-day visit counting actually does. `streak.visits_in_window` counts
 unique visit days inside the trailing 30 days; `streak.discount_for` maps that count to a discount
@@ -62,8 +75,8 @@ out, which is what keeps the chart from growing a dot per poll on uneventful day
 carries a `locations: {slug: score}` breakdown that forward-fills per-location values across days
 where only some locations were polled.
 
-A point's `date` is the day of *play*, `streak.activity_day(polled_at)`, not the `polled_at` day
-it was grouped from — the same shift the visit rows get. Reading the poll date straight off the
+A point's `date` is the day of *play*, `streak.snapshot_day(polled_at, activity_date)`, not the
+`polled_at` day it was grouped from — the same shift the visit rows get. Reading the poll date straight off the
 snapshot is what put every dot a day late while "days since last visit" stayed right: the latter
 reads `visits.visit_date`, which had the lag backed out all along.
 
@@ -218,9 +231,21 @@ per location per poll**, not one per player, and a catalog failure never fails t
 
 That throttle has one blind spot by design: `/highscores` is the whole venue's top score, set by
 people we don't track, so a location where none of *our* players moved never gets its top scores
-re-read. `poll_all(..., force_catalog=True)` overrides it, exposed as the admin page's
-**Refresh + rebuild catalog** button (`POST /admin/refresh-catalog`) alongside the ordinary
-throttled **Refresh all now**.
+re-read. `poll_all(..., force_catalog=True)` overrides it, and the nightly scheduled poll passes
+it — one room walk a day keeps the venue's top scores current. The public Refresh button stays
+throttled.
+
+### Public refresh button
+The front page's **Refresh scores** (`POST /refresh`, open to anyone) starts a `manual=True`
+poll in the background; the page then asks `/api/refresh-status` every few seconds and reloads
+once the poll is done. The cooldown (`poll.manual_cooldown_seconds`, 600) is enforced
+server-side and counts from the newest of: the last poll this process started (either kind,
+`poller.last_poll`), the last button press (set before the poll is scheduled, so two presses in
+one instant can't both pass), and `MAX(score_snapshots.polled_at)` — the last of which is what
+survives a restart. A refused press gets a 429 with `Retry-After`. Logged-in callers' CSRF token
+is checked by `CsrfMiddleware`, so the page's fetch sends it urlencoded; an anonymous cross-site
+POST can at worst spend the cooldown, which anyone could do anyway. There are no admin refresh
+buttons any more — bookings poll on their own schedule.
 
 
 ### The catalog validates itself against /games
@@ -357,7 +382,7 @@ nothing about the request and the same handle works later, where a 404 or 500 me
 asking. Only the former is retried, waiting the response's own `Retry-After` when it sends
 one (`scraper.retry_after_seconds` handles both RFC forms) and a doubling backoff when it
 doesn't. A wait over `max_wait_seconds` gives up instead: a poll holds `_poll_lock`, so an
-hour asleep here is an hour the scheduler and the admin's Refresh button spend blocked, to
+hour asleep here is an hour the scheduler and the public Refresh button spend blocked, to
 save one day of staleness on one player's badge progress.
 
 Dropping a 429 was not merely lossy, it was *unfair*: the leg ran in score-poll order, which
@@ -419,7 +444,7 @@ location's offer (32 of 101). So `/badges` doesn't compare those two: `badge_dat
 (from `location_badges`, below), and the page warns only when *that* disagrees with the
 tally. Without the location's stored list it falls back to the whole count, which then
 disagrees honestly for anyone holding a badge no tracked location offers. `earned_on` is stamped only on an observed false→true transition
-and dated `streak.activity_day` — the same one-day backdate the visit rows get, so a badge
+and dated to the poll's play day — the same `streak.poll_day` the visit rows get, so a badge
 and the visit from the same session can't disagree. On a player's *first* poll there is no
 transition to observe, so everything already earned is left NULL rather than backdated to
 today, which would be a fabricated date. Multi-handle players go through
@@ -724,8 +749,8 @@ unstyled ones.
 Each record chip on the dashboard carries the day it was set in its `title`. `_record_dates`
 derives it by walking that player-location's snapshots oldest-first and taking the first one whose
 score for the level reached its current value — sound only because Activate banks the best-ever
-run, so a level's stored high never falls. The date is `streak.activity_day(polled_at)`, the same
-one-day backdate the visit rows and chart points get, so a record and the visit that set it agree.
+run, so a level's stored high never falls. The date is `streak.snapshot_day`, the same
+play day the visit rows and chart points get, so a record and the visit that set it agree.
 A level already at its current value in the player's *earliest* snapshot has no observed
 transition and gets no date — it was set at some unknown point before tracking, and the chip says
 so rather than naming the first poll. That is the `earned_on` rule for badges, applied to scores.

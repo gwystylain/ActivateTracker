@@ -106,3 +106,27 @@ def test_summarize_counts_buckets():
     # Visits within the trailing 30 days: 4/1, 4/27, 4/28 (Jan 5 is too old).
     assert s.visits_last_30_days == 3
     assert s.discount_pct == 20
+
+
+# ---------- manual vs scheduled poll dating ----------
+
+def test_a_scheduled_poll_credits_yesterday():
+    from zoneinfo import ZoneInfo
+    from app.streak import poll_day
+    now = datetime(2026, 11, 15, 11, 0, tzinfo=timezone.utc)   # 3am Pacific
+    assert poll_day(now, manual=False, tz=ZoneInfo("America/Vancouver")) == date(2026, 11, 14)
+
+
+def test_a_manual_poll_credits_the_local_day_not_utcs():
+    """8pm in Vancouver is already the next day in UTC; the play was today."""
+    from zoneinfo import ZoneInfo
+    from app.streak import poll_day
+    now = datetime(2026, 11, 16, 4, 0, tzinfo=timezone.utc)    # Nov 15, 8pm PST
+    assert poll_day(now, manual=True, tz=ZoneInfo("America/Vancouver")) == date(2026, 11, 15)
+
+
+def test_snapshot_day_prefers_the_stored_date_and_falls_back_to_the_lag():
+    from app.streak import snapshot_day
+    assert snapshot_day("2026-11-16T04:00:00+00:00", "2026-11-15") == date(2026, 11, 15)
+    assert snapshot_day("2026-11-16T04:00:00+00:00", None) == date(2026, 11, 15)
+    assert snapshot_day("2026-11-15T20:00:00+00:00", "2026-11-15") == date(2026, 11, 15)

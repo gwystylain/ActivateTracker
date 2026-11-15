@@ -21,6 +21,8 @@ poll:
   # cron     - 5-field crontab, e.g. "0 11 * * *"
   schedule: "daily"
   hour_utc: 11                # 11:00 UTC ~= 04:00 Pacific
+  timezone: "America/Vancouver"  # a manual refresh credits play to today here
+  manual_cooldown_seconds: 600    # gap enforced on the public Refresh button
   request_timeout_sec: 20
   jitter_seconds: [0.5, 2.0]  # min/max random delay between requests
   user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"

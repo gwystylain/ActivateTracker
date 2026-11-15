@@ -10,12 +10,12 @@
                 <button type="button" data-metric="top" aria-pressed="true">Best location</button>
                 <button type="button" data-metric="total" aria-pressed="false">All locations</button>
             </div>
-            {% endif %}
-            {% if logged_in %}
-                <form method="post" action="/admin/refresh" class="inline">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <button type="submit">Refresh now</button>
-                </form>
+            <div class="refresh-box" id="refreshBox" data-csrf="{{ csrf_token }}"
+                 data-cooldown="{{ refresh.cooldown_remaining }}"
+                 data-running="{{ 1 if refresh.running else 0 }}">
+                <button type="button" id="refreshBtn">Refresh scores</button>
+                <span class="muted small" id="refreshStatus" role="status" aria-live="polite">{% if refresh.last_label %}Updated {{ refresh.last_label }}{% endif %}</span>
+            </div>
             {% endif %}
         </div>
     </div>

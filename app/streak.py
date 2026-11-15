@@ -19,7 +19,7 @@ Activate discount rules (based on visits in the trailing 30 days):
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, tzinfo
 
 DISCOUNT_WINDOW_DAYS = 30
 DISCOUNT_MAX_PCT = 25
@@ -44,6 +44,32 @@ def activity_day(polled_at: str | date | datetime) -> date:
     else:
         day = polled_at
     return day - timedelta(days=SCORE_REFRESH_LAG_DAYS)
+
+
+def poll_day(now: datetime, *, manual: bool, tz: tzinfo) -> date:
+    """The day of play a poll run at `now` is credited to.
+
+    The scheduled poll runs in the small hours, so what it sees is yesterday's
+    play — `activity_day`. Somebody pressing Refresh is almost always doing it
+    the same day they played, often still at the venue, so a manual poll is
+    credited to *today* — the local date in `tz`, not UTC's, since an evening
+    in Vancouver is already tomorrow in UTC.
+    """
+    if manual:
+        return now.astimezone(tz).date()
+    return activity_day(now)
+
+
+def snapshot_day(polled_at: str, activity_date: str | None) -> date:
+    """The play day a stored snapshot describes.
+
+    New snapshots record it (`score_snapshots.activity_date`), because a manual
+    poll and the scheduled one date their data differently. Rows from before
+    that column were all scheduled or admin polls and get the old rule.
+    """
+    if activity_date:
+        return date.fromisoformat(activity_date)
+    return activity_day(polled_at)
 
 
 @dataclass(frozen=True)

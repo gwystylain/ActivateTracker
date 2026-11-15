@@ -42,6 +42,11 @@ class SessionConfig(BaseModel):
 class PollConfig(BaseModel):
     schedule: str = "daily"  # "daily" | "manual" | crontab
     hour_utc: int = 11
+    # The venues' zone. A manual refresh credits its scores to *today* here
+    # (see streak.poll_day); UTC's date would be tomorrow by evening.
+    timezone: str = "America/Vancouver"
+    # Shortest gap between refreshes started from the public button.
+    manual_cooldown_seconds: int = 600
     request_timeout_sec: float = 20.0
     jitter_seconds: tuple[float, float] = (0.5, 2.0)
     user_agent: str = (
@@ -54,6 +59,16 @@ class PollConfig(BaseModel):
     def _check_hour(cls, v: int) -> int:
         if not 0 <= v <= 23:
             raise ValueError("poll.hour_utc must be in 0..23")
+        return v
+
+    @field_validator("timezone")
+    @classmethod
+    def _check_tz(cls, v: str) -> str:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, ValueError) as e:
+            raise ValueError(f"poll.timezone {v!r} is not a known time zone") from e
         return v
 
 

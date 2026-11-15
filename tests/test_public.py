@@ -1139,3 +1139,91 @@ def test_favorites_are_grouped_by_room_and_say_who_still_needs_each():
     assert by_name["Pipes one"]["some_need"] is True
     assert "not_at" not in by_name["Pipes one"]
     assert by_name["Hide one"]["needs"] == ["Bo"]
+
+
+async def test_chart_uses_a_manual_polls_own_date(tmp_path):
+    """A manual refresh records the same day as its play; the chart must put
+    the point there rather than backdating it like a nightly poll."""
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _snap(conn, pid, 72, "2026-08-07T11:00:03+00:00", position=1, beat=1, total=100)
+    _snap(conn, pid, 72, "2026-08-08T03:00:00+00:00", position=1, beat=1, total=150)
+    conn.execute(
+        "UPDATE score_snapshots SET activity_date = '2026-08-07'"
+        " WHERE polled_at = '2026-08-08T03:00:00+00:00'"
+    )
+
+    (player,) = (await _chart(conn))["players"]
+    assert [(p["date"], p["total_score"]) for p in player["points"]] == [
+        ("2026-08-06", 100),
+        ("2026-08-07", 150),
+    ]
+
+
+# ---------- public refresh ----------
+
+def _refresh_request(conn, cooldown=600):
+    from app.config import PollConfig
+    cfg = SimpleNamespace(
+        poll=PollConfig(manual_cooldown_seconds=cooldown), badges=None
+    )
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=conn, config=cfg)))
+
+
+def _fresh_refresh_state(monkeypatch):
+    from app import poller
+    from app.routes import public
+    monkeypatch.setitem(poller.last_poll, "started_at", None)
+    monkeypatch.setattr(public, "_refresh_requested_at", None)
+
+
+async def test_refresh_starts_a_manual_poll_then_holds_the_cooldown(tmp_path, monkeypatch):
+    from fastapi import BackgroundTasks
+    from app import poller
+    from app.routes.public import public_refresh
+    _fresh_refresh_state(monkeypatch)
+    conn = _conn(tmp_path)
+    calls = []
+
+    async def fake_poll(conn, poll_cfg, **kw):
+        calls.append(kw)
+    monkeypatch.setattr(poller, "poll_all", fake_poll)
+
+    tasks = BackgroundTasks()
+    resp = await public_refresh(_refresh_request(conn), tasks)
+    assert resp.status_code == 202
+    await tasks()
+    assert calls == [{"badge_cfg": None, "manual": True}]
+
+    again = await public_refresh(_refresh_request(conn), BackgroundTasks())
+    body = json.loads(again.body)
+    assert again.status_code == 429
+    assert 590 < body["cooldown_remaining"] <= 600
+    assert again.headers["Retry-After"] == str(body["cooldown_remaining"])
+
+
+async def test_refresh_cooldown_counts_from_the_newest_snapshot_after_a_restart(
+    tmp_path, monkeypatch
+):
+    from datetime import datetime, timedelta, timezone
+    from app.routes.public import _refresh_state
+    _fresh_refresh_state(monkeypatch)
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    four_min_ago = datetime.now(timezone.utc) - timedelta(minutes=4)
+    _snap(conn, pid, 72, four_min_ago.isoformat(timespec="seconds"), position=1, beat=1)
+
+    st = _refresh_state(_refresh_request(conn))
+    assert 355 <= st["cooldown_remaining"] <= 360
+    assert st["last_label"].startswith(("today at", "yesterday at"))
+    assert st["running"] is False
+
+
+async def test_refresh_is_open_once_the_cooldown_has_passed(tmp_path, monkeypatch):
+    from app.routes.public import _refresh_state
+    _fresh_refresh_state(monkeypatch)
+    conn = _conn(tmp_path)
+    pid = _seed_player(conn)
+    _snap(conn, pid, 72, "2026-08-01T11:00:00+00:00", position=1, beat=1)
+
+    assert _refresh_state(_refresh_request(conn))["cooldown_remaining"] == 0

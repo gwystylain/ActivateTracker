@@ -69,7 +69,11 @@ async def lifespan(app: FastAPI):
     if trigger is not None:
         async def scheduled_poll():
             try:
-                await poller.poll_all(conn, cfg.poll, badge_cfg=cfg.badges)
+                # Forced catalog walk: the venue's top scores are set by people
+                # we don't track, so nothing else would re-read them.
+                await poller.poll_all(
+                    conn, cfg.poll, force_catalog=True, badge_cfg=cfg.badges
+                )
             except Exception:
                 log.exception("scheduled poll failed")
 

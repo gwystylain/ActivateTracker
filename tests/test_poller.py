@@ -1151,3 +1151,35 @@ def test_a_retired_badge_survives_while_another_player_still_holds_it(tmp_path):
 
     poller_mod.persist_badges(conn, two, _states((1, True)))
     assert conn.execute("SELECT COUNT(*) FROM badges WHERE badge_id = 50").fetchone()[0] == 0
+
+
+# ---------- manual refresh dating ----------
+
+async def test_a_manual_poll_dates_its_visit_and_snapshot_to_the_same_local_day(
+    tmp_path, monkeypatch
+):
+    conn = _conn(tmp_path)
+    pid = _insert_player(conn)
+    totals = {"gmebagholder": 100}
+    _wire_poll(monkeypatch, totals)
+    cfg = PollConfig(jitter_seconds=(0.0, 0.0))
+
+    # Nightly poll at 3am Pacific: yesterday's play.
+    await poller_mod.poll_all(
+        conn, cfg, now=datetime(2026, 11, 15, 11, 0, tzinfo=timezone.utc)
+    )
+    # They play that evening and somebody presses Refresh at 8pm Pacific,
+    # which is already Nov 16 in UTC.
+    totals["gmebagholder"] = 150
+    await poller_mod.poll_all(
+        conn, cfg, manual=True, now=datetime(2026, 11, 16, 4, 0, tzinfo=timezone.utc)
+    )
+
+    days = [r["activity_date"] for r in conn.execute(
+        "SELECT activity_date FROM score_snapshots WHERE player_id = ? ORDER BY id", (pid,)
+    )]
+    assert days == ["2026-11-14", "2026-11-15"]
+    (visit,) = conn.execute("SELECT visit_date FROM visits").fetchall()
+    assert visit["visit_date"] == "2026-11-15"
+    assert poller_mod.last_poll["manual"] is True
+    assert poller_mod.last_poll["finished_at"] is not None
