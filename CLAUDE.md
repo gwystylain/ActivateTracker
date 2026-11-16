@@ -400,7 +400,7 @@ player — or one of a player's locations — would clear every badge only the m
 holds. `poller._write_badges` therefore takes each source whole or not at all: the site's when
 every `(handle, location)` answered, the proxy's when every handle did. Either alone is enough
 to write; with neither, the write is skipped (`badges_skipped`) and last poll's rows stand —
-older but true, and `/badges` states the date it is showing.
+older but true. (`/badges` no longer shows that date; its As of column was dropped.)
 
 **Upstream retires badges, so `poller._retire_badges` deletes.** Go For Gold, Recollection
 and Sniper Shot 1.0 went in the move, taking the catalog from 118 to 115, and Mascot followed

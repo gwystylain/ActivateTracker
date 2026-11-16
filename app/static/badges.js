@@ -357,12 +357,6 @@
     function renderSummary() {
         summaryBody.replaceChildren();
         for (const p of data.players) {
-            const starsWon = data.badges.reduce((sum, b) => {
-                const st = stateOf(p.id, b.badge_id);
-                return sum + (st && st.earned ? (b.stars || 0) : 0);
-            }, 0);
-            const starsAll = data.badges.reduce((sum, b) => sum + (b.stars || 0), 0);
-
             summaryBody.appendChild(el('tr', null, [
                 el('td', { text: p.display_name }),
                 el('td', { className: 'count' }, [
@@ -376,11 +370,6 @@
                         ? p.to_next + ' to ' + p.next_tier
                         : 'all of them',
                 }),
-                el('td', {
-                    className: 'muted small',
-                    text: fmt.format(starsWon) + ' / ' + fmt.format(starsAll),
-                }),
-                el('td', { className: 'muted small', text: (p.updated_at || '').slice(0, 10) }),
             ]));
         }
         summaryNote.replaceChildren(...crossCheckNote());
