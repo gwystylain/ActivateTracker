@@ -112,40 +112,189 @@ def test_a_week_away_is_slacking_even_after_a_big_month(tmp_path):
     assert b.slacking
 
 
-def test_render_names_leaders_against_slackers_by_display_name(tmp_path):
+def test_the_roast_names_players_by_display_name_never_handle(tmp_path):
     conn = _conn(tmp_path)
-    a = _player(conn, "xx_handle_a", "Ace")
-    b = _player(conn, "xx_handle_b", "Bee")
-    z = _player(conn, "xx_handle_z", "Zed")
-    _visit(conn, a, "2026-11-17", 4000)
-    _visit(conn, b, "2026-11-18", 1000)
-    _visit(conn, z, "2026-10-27", 500)
+    for h, name, day in (("xx_a", "Ace", "2026-11-17"), ("xx_b", "Bee", "2026-11-18"),
+                         ("xx_z", "Zed", "2026-10-27")):
+        _visit(conn, _player(conn, h, name), day, 1000)
 
-    text = brief.render(_gather(conn), rng=random.Random(0))
-    headline, _, *lines = text.split("\n")
+    text = brief.render(_gather(conn), today=TODAY, rng=random.Random(0))
 
-    assert "**Ace** and **Bee**" in headline and "**Zed**" in headline
-    assert lines[0].startswith("**Ace**")          # leaders by points
-    assert lines[1].startswith("**Bee**")
-    assert lines[2].startswith("**Zed**") and "23 days" in lines[2]
-    assert "Meanwhile **Ace** banked 4,000 points" in lines[2]
-    assert "xx_handle" not in text
+    assert "**Ace**" in text and "**Bee**" in text and "**Zed**" in text
+    assert "xx_" not in text and "@" not in text
 
 
-def test_a_player_never_seen_is_called_out(tmp_path):
-    conn = _conn(tmp_path)
-    _player(conn, "ghost", "Ghost")
-    (b,) = _gather(conn)
-    assert b.days_since is None and b.slacking
-    assert "no visit on record" in brief.render([b])
+# ---------- render, from hand-built briefs ----------
+
+NOV14 = date(2026, 11, 14)
+NIGHT = [f"Badge {i}" for i in range(9)]
 
 
-def test_render_fits_one_discord_message(tmp_path):
-    conn = _conn(tmp_path)
-    for i in range(40):
-        pid = _player(conn, f"p{i}", f"Player number {i}")
-        _visit(conn, pid, "2026-11-18", 1000 + i)
-    assert len(brief.render(_gather(conn))) <= brief.DISCORD_LIMIT
+def _b(pid, name, *, days=2, pts=1000, visits=3, day=None, badges=(), wb=0, wr=0, disc=25):
+    """A PlayerBrief with only what render reads; a session unless never seen."""
+    session = None
+    if days is not None:
+        session = brief.Session(
+            day=day or date.fromordinal(TODAY.toordinal() - days), points=100,
+            badges=list(badges),
+        )
+    return brief.PlayerBrief(
+        id=pid, name=name, days_since=days, last_session=session,
+        window_points=pts, window_visits=visits, window_badges=wb,
+        window_records=wr, records_held=wr, discount_pct=disc,
+    )
+
+
+def _crew():
+    """Our four, as the live data stood on Nov 19."""
+    return [
+        _b(1, "Edward", days=5, day=NOV14, pts=800_384, visits=9, badges=NIGHT, wb=38, wr=23),
+        _b(2, "Aaron", days=5, day=NOV14, pts=799_666, visits=9, badges=NIGHT, wb=36, wr=15),
+        _b(3, "Landon", days=5, day=NOV14, pts=468_120, visits=6, badges=NIGHT, wb=30, wr=6),
+        _b(4, "Michael", days=3, pts=365_946, visits=4, badges=["x"], wb=9, wr=3),
+    ]
+
+
+def _render(briefs, seed=0, **kw):
+    return brief.render(briefs, today=TODAY, rng=random.Random(seed), **kw)
+
+
+def _player_lines(text):
+    return [ln for ln in text.split("\n") if "** · " in ln]
+
+
+def test_layout_is_heading_subtext_headline_ranks_then_extras():
+    text = _render(_crew())
+    sections = text.split("\n\n")
+
+    assert sections[0] == f"{brief.HEADING}\n-# last 30 days · as of Nov 19"
+    assert "**Michael**" in sections[1]                       # last place, by name
+    ranks = sections[2].split("\n")
+    assert [ln.split(" ")[0] for ln in ranks] == ["🥇", "🥈", "🥉", "🐢"]
+    assert [ln.split("**")[1] for ln in ranks] == ["Edward", "Aaron", "Landon", "Michael"]
+    assert sections[-1].startswith(("🔥", "🏅", "🎯", "💸"))   # awards close it
+    # No lists of badge or record names any more.
+    assert "Badge 0" not in text
+
+
+def test_each_player_line_carries_one_abbreviated_number():
+    lines = _player_lines(_render(_crew()))
+    assert "· 800k." in lines[0]
+    assert "· 468k." in lines[2]
+    assert "· 366k." in lines[3]
+
+
+def test_a_seeded_rng_gives_the_same_post_and_different_seeds_vary():
+    assert _render(_crew(), seed=7) == _render(_crew(), seed=7)
+    assert len({_render(_crew(), seed=s) for s in range(12)}) > 1
+
+
+def test_no_taunt_repeats_within_one_post():
+    briefs = [_b(i, f"P{i}", pts=10_000 * (10 - i), visits=3) for i in range(8)]
+    taunts = [ln.split(". ", 1)[1] for ln in _player_lines(_render(briefs))]
+    assert len(taunts) == len(set(taunts))
+
+
+def test_a_near_tie_is_called_out_as_the_gap():
+    text = _render(_crew())
+    aaron = _player_lines(text)[1]
+    assert "· 718 points behind." in aaron
+    assert aaron.split(". ", 1)[1].format(ahead="Edward") in {
+        t.format(ahead="Edward") for t in brief._NEAR_TIE
+    }
+    # And the leader is reminded how narrow it was.
+    edward = _player_lines(text)[0]
+    assert edward.split(". ", 1)[1] in {
+        t.format(gap="718") for t in brief._LEADER_BARELY
+    }
+
+
+def test_a_shared_night_out_is_one_line_not_one_per_player():
+    text = _render(_crew())
+    outings = [ln for ln in text.split("\n") if ln.startswith(("🎉", "🤝"))]
+    assert len(outings) == 1
+    assert "Nov 14" in outings[0] and "9 badges" in outings[0]
+    assert "**Edward**, **Aaron** and **Landon**" in outings[0]
+    assert "Michael" not in outings[0]
+
+
+def test_one_player_with_a_big_night_gets_a_line_alone():
+    briefs = [
+        _b(1, "Ace", day=NOV14, days=5, badges=NIGHT, pts=5000),
+        _b(2, "Bee", pts=4000, badges=["one"]),
+    ]
+    outings = [ln for ln in _render(briefs).split("\n") if ln.startswith("🎉")]
+    assert len(outings) == 1 and "**Ace**" in outings[0] and "Bee" not in outings[0]
+
+
+def test_slackers_are_roasted_on_days_gone_and_the_worst_is_the_headline():
+    briefs = _crew()[:3] + [
+        _b(4, "Michael", days=21, pts=41_300, visits=1, disc=0),
+        _b(5, "Zed", days=9, pts=0, visits=0, disc=10),
+    ]
+    text = _render(briefs)
+    lines = _player_lines(text)
+
+    assert lines[3].startswith("💤 **Zed** · 9 days gone.")
+    assert lines[4].startswith("🪦 **Michael** · 21 days gone.")
+    assert any(t in lines[4] for t in brief._DISCOUNT_GONE)
+    assert "10%" in lines[3]
+    headline = text.split("\n\n")[1]
+    assert "**Michael**" in headline and "Zed" not in headline
+    assert "💸 Discount gone: **Michael**" in text
+
+
+def test_a_player_never_seen_is_a_ghost_and_last_place():
+    text = _render([_b(1, "Ace"), _b(2, "Casper", days=None, pts=0, visits=0, disc=0)])
+    assert _player_lines(text)[-1].startswith("👻 **Casper** · never seen.")
+    assert "**Casper**" in text.split("\n\n")[1]
+
+
+def test_fewer_visits_but_more_per_visit_gets_a_grudging_nod():
+    briefs = [_b(1, "Ace", pts=900_000, visits=10), _b(2, "Bee", pts=500_000, visits=3),
+              _b(3, "Cee", pts=100_000, visits=8)]
+    bee = _player_lines(_render(briefs))[1]
+    assert bee.split(". ", 1)[1] in {t.format(leader="Ace") for t in brief._MIDDLE_EFFICIENT}
+
+
+def test_one_player_alone_gets_no_headline_and_no_awards():
+    text = _render([_b(1, "Ace")])
+    sections = text.split("\n\n")
+    assert len(sections) == 2 and sections[1].startswith("🥇 **Ace**")
+
+
+def test_short_numbers():
+    assert [brief.short(n) for n in (718, 4_500, 4_000, 468_120, 999_600, 1_234_567)] == [
+        "718", "4.5k", "4k", "468k", "1M", "1.2M",
+    ]
+
+
+def test_a_crowded_post_fits_one_discord_message_by_trimming_whole_lines():
+    briefs = [_b(i, f"Player with a long name {i}", pts=10_000 + i, visits=2, wb=i)
+              for i in range(60)]
+    text = _render(briefs)
+    assert len(text) <= brief.DISCORD_LIMIT
+    assert "…" not in text                       # nothing cut mid-line
+    assert text.startswith(brief.HEADING)
+
+
+def test_trimming_drops_awards_then_middle_taunts_then_the_rest(monkeypatch):
+    def has_taunt(line):
+        return len(line.split(". ", 1)) == 2
+
+    full = _render(_crew())
+    awards = full.split("\n\n")[-1]
+
+    # Just too long: the awards go, every taunt stays.
+    monkeypatch.setattr(brief, "DISCORD_LIMIT", len(full) - 1)
+    text = _render(_crew())
+    assert awards not in text and "🎉" in text
+    assert all(has_taunt(ln) for ln in _player_lines(text))
+
+    # Shorter still: only the leader and last place keep theirs.
+    monkeypatch.setattr(brief, "DISCORD_LIMIT", len(full) - len(awards) - 10)
+    lines = _player_lines(_render(_crew()))
+    assert [has_taunt(ln) for ln in lines] == [True, False, False, True]
 
 
 async def _call(conn, players="", days=30):

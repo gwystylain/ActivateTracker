@@ -585,7 +585,7 @@ async def player_brief(request: Request, players: str = "", days: int = 30) -> J
         {
             "as_of": today.isoformat(),
             "window_days": days,
-            "text": brief_mod.render(briefs, window_days=days),
+            "text": brief_mod.render(briefs, window_days=days, today=today),
             "players": [b.to_json() for b in briefs],
         },
         headers={"Cache-Control": "no-store"},

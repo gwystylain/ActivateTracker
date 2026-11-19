@@ -101,8 +101,27 @@ can't be named. Public and read-only like the rest of `/api/`, since it recombin
 `visits.visit_date`, and its badges and records are the ones whose `earned_on` / `_record_dates`
 day is that same play day — the three agree because all are `streak.poll_day`. Anything held since
 before tracking has no date and is never "recent". A player is slacking at `SLACK_DAYS` (7) without
-a visit or with no points in the window. Players are always named by display name. "Today" is the
-local date in `poll.timezone`, not the server's: by evening UTC it's already tomorrow.
+a visit or with no points in the window. Players are always named by display name, bold, never
+with an `@`. "Today" is the local date in `poll.timezone`, not the server's: by evening UTC it's
+already tomorrow.
+
+`render` writes a group-chat roast, not a report. A `#` heading and a `-#` subtext (window, as-of
+date), then a headline aimed at last place by name, then one line per player: a rank emoji (🥇🥈🥉,
+😐 for the middle, 🐢 last; 💤 slacking, 🪦 the longest gone, 👻 never seen), **one** number
+(window points abbreviated by `short`, "N points behind" for a near-tie within `NEAR_TIE` of the
+player ahead, or days gone) and a taunt. Slackers sit below everyone active, the longest gone at
+the bottom, so last place is always the last line. Everything rank-shaped (order, gaps, near-ties,
+points per visit for the grudging nod) is worked out in `render` from `PlayerBrief`; `gather` and
+the JSON facts don't carry it. Players whose last session fell on the same day with the same
+badges went together and get one 🎉 line; a solo night of `BIG_NIGHT` badges gets one too. Up to
+`MAX_AWARDS` closing lines (💸 🔥 🏅 🎯) appear only when they single somebody out, preferring
+winners not already named.
+
+Each situation picks from a template pool through `rng`, and `_Picker` avoids reusing a template
+within one post, so a seeded `rng` gives the same text and back-to-back posts differ. Over
+`DISCORD_LIMIT` it trims in steps — awards, then all taunts but the leader's and last place's,
+then those, then the outing lines — and only then drops whole player lines from the middle. It
+never cuts mid-line unless a single line is somehow longer than the limit.
 
 ### CSRF via body-replay middleware
 `security.CsrfMiddleware._peek_form` reads the request body once, parses it manually, then
