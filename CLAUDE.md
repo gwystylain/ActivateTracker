@@ -123,6 +123,18 @@ within one post, so a seeded `rng` gives the same text and back-to-back posts di
 then those, then the outing lines — and only then drops whole player lines from the middle. It
 never cuts mid-line unless a single line is somehow longer than the limit.
 
+### /api/rankings: one gamemode, per location, for the bot
+`GET /api/rankings` ranks tracked players in Hoops' Trivia at every tracked location; `room`,
+`game`, `players` (as `/api/brief`) and `location` (slug, name or id) narrow or change it. The site
+calls that gamemode **Trivial**, so `rankings.find_game` takes an exact name or a prefix only one
+gamemode in the room has. A standing is the **sum of the player's best score on each level** at
+that location — Activate publishes no per-gamemode total, and the sum rewards both clearing levels
+and scoring well on them — with levels scored and records (`>=` the location's top, the
+`_build_records` rule) alongside. Ties share a rank. Read from the newest snapshot per player, like
+`/games`; a player with no score in it is listed as never played, and a location whose catalog
+lacks the gamemode says so rather than being dropped. A gamemode found at no location is a 404.
+`text` is Discord Markdown under `DISCORD_LIMIT`, trimmed by whole lines from the bottom.
+
 ### CSRF via body-replay middleware
 `security.CsrfMiddleware._peek_form` reads the request body once, parses it manually, then
 replaces `request._receive` with a closure that hands the same bytes back. Necessary because

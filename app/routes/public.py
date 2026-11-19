@@ -18,6 +18,7 @@ from .. import busy as busy_mod
 from .. import catalog as catalog_mod
 from .. import master_document
 from .. import poller
+from .. import rankings as rankings_mod
 from .. import streak as streak_mod
 from ..auth import csrf_ok, csrf_token_for, read_session
 from ..db import transaction
@@ -550,6 +551,123 @@ async def player_brief(request: Request, players: str = "", days: int = 30) -> J
     """
     cfg = request.app.state.config
     conn = request.app.state.db
+    chosen = _resolve_players(conn, players)
+    if isinstance(chosen, JSONResponse):
+        return chosen
+
+    days = max(1, min(days, 365))
+    # The venues' date, not the server's: by evening UTC is already tomorrow,
+    # and every "days ago" would be one too many.
+    today = datetime.now(ZoneInfo(cfg.poll.timezone)).date()
+    briefs = brief_mod.gather(
+        conn, chosen, records=_build_records(conn), today=today, window_days=days
+    )
+    return JSONResponse(
+        {
+            "as_of": today.isoformat(),
+            "window_days": days,
+            "text": brief_mod.render(briefs, window_days=days, today=today),
+            "players": [b.to_json() for b in briefs],
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/api/rankings")
+async def gamemode_rankings(
+    request: Request,
+    room: str = rankings_mod.DEFAULT_ROOM,
+    game: str = rankings_mod.DEFAULT_GAME,
+    players: str = "",
+    location: str = "",
+) -> JSONResponse:
+    """How tracked players rank in one gamemode at each tracked location —
+    Hoops' Trivia unless `room`/`game` say otherwise — for the Discord bot.
+
+    `game` matches the catalog's name or a prefix only one gamemode in the room
+    has, so "trivia" finds the site's "Trivial". `players` works as in
+    `/api/brief`; `location` narrows to one location by slug or id. Answers
+    `{"text": <Discord Markdown>, "locations": [...]}`.
+    """
+    cfg = request.app.state.config
+    conn = request.app.state.db
+    chosen = _resolve_players(conn, players)
+    if isinstance(chosen, JSONResponse):
+        return chosen
+    wanted = {r["id"] for r in chosen}
+
+    locations = _tracked_locations(conn)
+    if location:
+        key = location.strip().casefold()
+        locations = [
+            loc for loc in locations
+            if key in (str(loc["location_id"]), loc["slug"].casefold(), loc["name"].casefold())
+        ]
+        if not locations:
+            return JSONResponse({"error": "unknown location", "location": location}, status_code=404)
+
+    out: list[rankings_mod.LocationRanking] = []
+    game_name: str | None = None
+    room_name = room
+    for loc in locations:
+        lid = loc["location_id"]
+        catalog = [
+            {"room": r["name"], "name": g["name"], "game_id": g["game_id"], "levels": g["levels"]}
+            for r in catalog_mod.rooms_for_location(conn, lid)
+            for g in r["games"]
+        ]
+        found = rankings_mod.find_game(catalog, room, game)
+        if found is None:
+            out.append(rankings_mod.LocationRanking(lid, loc["name"], None, None, 0, [], []))
+            continue
+        game_name, room_name = game_name or found["name"], found["room"]
+        snaps = [
+            {
+                "id": r["player_id"],
+                "name": r["display_name"] or r["handle"],
+                "beaten": _beaten_levels(r["raw_scores_json"]),
+            }
+            for r in _latest_snapshots(conn, lid)
+            if r["player_id"] in wanted
+        ]
+        standings, never = rankings_mod.rank(
+            found["game_id"],
+            found["levels"],
+            snaps,
+            catalog_mod.top_scores_for_location(conn, lid).get(found["game_id"], {}),
+        )
+        out.append(
+            rankings_mod.LocationRanking(
+                lid, loc["name"], found["game_id"], found["name"],
+                len(found["levels"]), standings, never,
+            )
+        )
+
+    if game_name is None:
+        return JSONResponse(
+            {"error": "no such gamemode at any tracked location", "room": room, "game": game},
+            status_code=404,
+        )
+    today = datetime.now(ZoneInfo(cfg.poll.timezone)).date()
+    return JSONResponse(
+        {
+            "as_of": today.isoformat(),
+            "room": room_name,
+            "game": game_name,
+            "text": rankings_mod.render(room_name, game_name, out, today=today),
+            "locations": [r.to_json() for r in out],
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+def _resolve_players(conn, players: str) -> list[Any] | JSONResponse:
+    """The visible players a comma-separated `players` names, or all of them.
+
+    Each name matches a display name, any one handle, or the id, ignoring case;
+    naming one twice lists them once. A 404 naming the ones it can't place, so
+    the bot can say who it didn't recognise. Hidden players can't be named.
+    """
     rows = conn.execute(
         """
         SELECT id, handle, display_name, initial_streak, initial_streak_set_at
@@ -573,23 +691,7 @@ async def player_brief(request: Request, players: str = "", days: int = 30) -> J
     chosen = chosen or rows
     if not chosen:
         return JSONResponse({"error": "no players tracked"}, status_code=404)
-
-    days = max(1, min(days, 365))
-    # The venues' date, not the server's: by evening UTC is already tomorrow,
-    # and every "days ago" would be one too many.
-    today = datetime.now(ZoneInfo(cfg.poll.timezone)).date()
-    briefs = brief_mod.gather(
-        conn, chosen, records=_build_records(conn), today=today, window_days=days
-    )
-    return JSONResponse(
-        {
-            "as_of": today.isoformat(),
-            "window_days": days,
-            "text": brief_mod.render(briefs, window_days=days, today=today),
-            "players": [b.to_json() for b in briefs],
-        },
-        headers={"Cache-Control": "no-store"},
-    )
+    return chosen
 
 
 @router.get("/api/game-data")
