@@ -248,15 +248,6 @@ async def _poll_locked(
     if not rows:
         return counters
 
-    jitter_lo, jitter_hi = poll_cfg.jitter_seconds
-    first_request = True
-
-    async def pace() -> None:
-        nonlocal first_request
-        if not first_request:
-            await asyncio.sleep(random.uniform(jitter_lo, jitter_hi))
-        first_request = False
-
     timeout = poll_cfg.request_timeout_sec
     proxy_on = badge_cfg is not None and badge_cfg.enabled
 
@@ -264,7 +255,6 @@ async def _poll_locked(
         # ---- 1. locations ----
         locations: dict[int, scraper.LocationInfo] = {}
         for location_id in sorted({r["location_id"] for r in rows}):
-            await pace()
             try:
                 locations[location_id] = await scraper.fetch_location(
                     location_id, session=session, timeout=timeout
@@ -298,7 +288,6 @@ async def _poll_locked(
             results: list[scraper.ScrapeResult] = []
             for handle in handles:
                 if handle not in profiles:
-                    await pace()
                     try:
                         profiles[handle] = await scraper.fetch_profile(
                             handle, session=session, timeout=timeout
@@ -314,7 +303,6 @@ async def _poll_locked(
                     site_failed[player_id] = site_failed.get(player_id, 0) + 1
                     continue
 
-                await pace()
                 try:
                     results.append(
                         await scraper.fetch(
@@ -335,7 +323,6 @@ async def _poll_locked(
                     )
                     continue
 
-                await pace()
                 try:
                     states = await scraper.fetch_player_badges(
                         handle, location_id, session=session, timeout=timeout

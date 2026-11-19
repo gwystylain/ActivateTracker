@@ -1,4 +1,4 @@
-// /busy — which upcoming evening is quietest at the chosen time.
+// /busy — when to go: which upcoming day is quietest at the chosen time.
 //
 // The server sends, per day and per 15-minute arrival, the most people booked
 // onto the floor at any moment of a 60-, 90- or 120-minute visit starting then

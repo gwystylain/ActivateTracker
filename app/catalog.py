@@ -9,10 +9,8 @@ a refresh adds is one /highscores request per *room*, not per player.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import random
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Iterable
@@ -74,7 +72,6 @@ async def refresh_location(
     # /rooms carries no ordering field; its own order is the site's.
     rooms = [{**r, "order": i} for i, r in enumerate(info.rooms)]
     counters = {"rooms": 0, "errors": 0}
-    jitter_lo, jitter_hi = poll_cfg.jitter_seconds
 
     for room in rooms:
         games = info.games_in(room["id"])
@@ -84,7 +81,6 @@ async def refresh_location(
             _store_room(conn, location_id, room, games, {})
             counters["rooms"] += 1
             continue
-        await asyncio.sleep(random.uniform(jitter_lo, jitter_hi))
         try:
             top_scores = await scraper.fetch_room_top_scores(
                 location_id,

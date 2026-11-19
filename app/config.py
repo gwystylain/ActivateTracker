@@ -48,7 +48,6 @@ class PollConfig(BaseModel):
     # Shortest gap between refreshes started from the public button.
     manual_cooldown_seconds: int = 600
     request_timeout_sec: float = 20.0
-    jitter_seconds: tuple[float, float] = (0.5, 2.0)
     user_agent: str = (
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
@@ -89,8 +88,8 @@ class BadgeConfig(BaseModel):
     enabled: bool = True
     api_base: str = "https://www.activate-scores.ca/api/activate/badges"
 
-    # Still its own spacing rather than sharing `poll.jitter_seconds`, because
-    # this is the one leg that leaves playactivate.com and the host that serves
+    # The only spacing left in a poll — playactivate.com's own API is asked
+    # back to back — because this is the one leg that leaves playactivate.com and the host that serves
     # it publishes a limit. The predecessor at api.ryflix.ca let five handles
     # through a minute and refused the rest with an instant 429; this one states
     # `X-RateLimit-Limit: 120` over a window whose reset sat ~30s out when

@@ -279,7 +279,7 @@ async def test_poll_refreshes_a_location_once_not_once_per_player(tmp_path, monk
         )
     calls = _wire_poll(monkeypatch, {"gmebagholder": 100, "kavo": 200})
 
-    counters = await poller_mod.poll_all(conn, PollConfig(jitter_seconds=(0.0, 0.0)))
+    counters = await poller_mod.poll_all(conn, PollConfig())
 
     assert counters["polled"] == 2
     assert calls["locations"] == [72]            # one location read, not two
@@ -291,7 +291,7 @@ async def test_poll_skips_the_catalog_when_no_score_moved(tmp_path, monkeypatch)
     conn = _conn(tmp_path)
     _insert_player(conn)
     refreshed = _wire_poll(monkeypatch, {"gmebagholder": 100})["refreshed"]
-    cfg = PollConfig(jitter_seconds=(0.0, 0.0))
+    cfg = PollConfig()
 
     await poller_mod.poll_all(conn, cfg)          # bootstraps the catalog
     assert refreshed == [72]
@@ -307,7 +307,7 @@ async def test_force_catalog_rewalks_even_when_nothing_moved(tmp_path, monkeypat
     conn = _conn(tmp_path)
     _insert_player(conn)
     refreshed = _wire_poll(monkeypatch, {"gmebagholder": 100})["refreshed"]
-    cfg = PollConfig(jitter_seconds=(0.0, 0.0))
+    cfg = PollConfig()
 
     await poller_mod.poll_all(conn, cfg)
     await poller_mod.poll_all(conn, cfg)                          # throttled
@@ -322,7 +322,7 @@ async def test_poll_refreshes_the_catalog_when_a_score_moved(tmp_path, monkeypat
     _insert_player(conn)
     totals = {"gmebagholder": 100}
     refreshed = _wire_poll(monkeypatch, totals)["refreshed"]
-    cfg = PollConfig(jitter_seconds=(0.0, 0.0))
+    cfg = PollConfig()
 
     await poller_mod.poll_all(conn, cfg)
     totals["gmebagholder"] = 150                  # they played
@@ -341,7 +341,7 @@ async def test_catalog_failure_does_not_fail_the_score_poll(tmp_path, monkeypatc
 
     monkeypatch.setattr(poller_mod.catalog_mod, "refresh_location", boom)
 
-    counters = await poller_mod.poll_all(conn, PollConfig(jitter_seconds=(0.0, 0.0)))
+    counters = await poller_mod.poll_all(conn, PollConfig())
 
     assert counters["catalog_errors"] == 1
     assert counters["snapshots"] == 1             # the score still landed
@@ -359,7 +359,7 @@ async def test_a_location_that_fails_to_load_still_polls_its_scores(tmp_path, mo
         raise poller_mod.scraper.FetchError("HTTP 503")
 
     monkeypatch.setattr(poller_mod.scraper, "fetch_location", boom)
-    counters = await poller_mod.poll_all(conn, PollConfig(jitter_seconds=(0.0, 0.0)))
+    counters = await poller_mod.poll_all(conn, PollConfig())
 
     assert counters["location_errors"] == 1
     assert counters["snapshots"] == 1
@@ -381,7 +381,7 @@ async def test_the_profile_is_read_once_per_handle_not_once_per_location(tmp_pat
     )
     calls = _wire_poll(monkeypatch, {"gmebagholder": 100})
 
-    await poller_mod.poll_all(conn, PollConfig(jitter_seconds=(0.0, 0.0)))
+    await poller_mod.poll_all(conn, PollConfig())
 
     assert calls["profiles"] == ["gmebagholder"]
     assert calls["scores"] == [("gmebagholder", 38), ("gmebagholder", 72)]
@@ -406,7 +406,7 @@ async def test_an_unknown_handle_is_counted_per_location_but_asked_once(tmp_path
         raise poller_mod.scraper.FetchError("HTTP 404")
 
     monkeypatch.setattr(poller_mod.scraper, "fetch_profile", not_found)
-    counters = await poller_mod.poll_all(conn, PollConfig(jitter_seconds=(0.0, 0.0)))
+    counters = await poller_mod.poll_all(conn, PollConfig())
 
     assert asked == ["gmebagholder"]              # a 404 isn't asked again
     assert counters["errors"] == 2                # but both locations went unpolled
@@ -651,14 +651,14 @@ async def test_the_site_s_badges_land_with_no_proxy_at_all(tmp_path, monkeypatch
 
     _proxy(monkeypatch, refuse)
 
-    counters = await poller_mod.poll_all(conn, PollConfig(jitter_seconds=(0.0, 0.0)))
+    counters = await poller_mod.poll_all(conn, PollConfig())
 
     assert counters["badges_fetched"] == 1
     assert counters["badges_errors"] == 0
     assert _earned(conn, pid) == {1: 1, 2: 0}
 
     await poller_mod.poll_all(
-        conn, PollConfig(jitter_seconds=(0.0, 0.0)),
+        conn, PollConfig(),
         badge_cfg=BadgeConfig(enabled=False),
     )
 
@@ -677,7 +677,7 @@ async def test_the_proxy_is_asked_once_per_handle_not_once_per_location(tmp_path
     asked = _proxy(monkeypatch, lambda h: _states((1, True), (2, False)))
 
     counters = await poller_mod.poll_all(
-        conn, PollConfig(jitter_seconds=(0.0, 0.0)), badge_cfg=BadgeConfig()
+        conn, PollConfig(), badge_cfg=BadgeConfig()
     )
 
     assert asked == ["gmebagholder"]          # two locations, one proxy fetch
@@ -695,7 +695,7 @@ async def test_the_proxy_adds_progress_and_the_badges_no_location_offers(tmp_pat
     _proxy(monkeypatch, lambda h: _states((1, True), (2, False), (63, True)))
 
     await poller_mod.poll_all(
-        conn, PollConfig(jitter_seconds=(0.0, 0.0)), badge_cfg=_badge_cfg()
+        conn, PollConfig(), badge_cfg=_badge_cfg()
     )
 
     assert _earned(conn, pid) == {1: 1, 2: 0, 63: 1}
@@ -718,7 +718,7 @@ async def test_a_proxy_failure_does_not_fail_the_score_poll(tmp_path, monkeypatc
     _proxy(monkeypatch, boom)
 
     counters = await poller_mod.poll_all(
-        conn, PollConfig(jitter_seconds=(0.0, 0.0)), badge_cfg=BadgeConfig()
+        conn, PollConfig(), badge_cfg=BadgeConfig()
     )
 
     assert counters["badges_errors"] == 1
@@ -742,7 +742,7 @@ async def test_a_night_without_the_proxy_retires_nothing(tmp_path, monkeypatch):
     _proxy(monkeypatch, boom)
 
     counters = await poller_mod.poll_all(
-        conn, PollConfig(jitter_seconds=(0.0, 0.0)), badge_cfg=BadgeConfig()
+        conn, PollConfig(), badge_cfg=BadgeConfig()
     )
 
     assert counters["badges_retired"] == 0
@@ -758,7 +758,7 @@ async def test_with_the_proxy_switched_off_the_site_defines_the_catalog(tmp_path
     _wire_poll(monkeypatch, {"gmebagholder": 100})
 
     counters = await poller_mod.poll_all(
-        conn, PollConfig(jitter_seconds=(0.0, 0.0)),
+        conn, PollConfig(),
         badge_cfg=BadgeConfig(enabled=False),
     )
 
@@ -787,7 +787,7 @@ async def test_a_location_the_site_fails_on_falls_back_to_the_proxy(tmp_path, mo
     _proxy(monkeypatch, lambda h: _states((1, True), (2, True)))
 
     counters = await poller_mod.poll_all(
-        conn, PollConfig(jitter_seconds=(0.0, 0.0)), badge_cfg=_badge_cfg()
+        conn, PollConfig(), badge_cfg=_badge_cfg()
     )
 
     assert _earned(conn, pid) == {1: 1, 2: 1}         # the proxy's word, 50 retired
@@ -822,7 +822,7 @@ async def test_one_handle_failing_does_not_wipe_the_others_badges(tmp_path, monk
 
     counters = await poller_mod.poll_all(
         conn,
-        PollConfig(jitter_seconds=(0.0, 0.0)),
+        PollConfig(),
         badge_cfg=_badge_cfg(max_retries=0),
     )
 
@@ -852,7 +852,7 @@ async def test_either_source_whole_is_enough_for_a_two_handle_player(tmp_path, m
 
     counters = await poller_mod.poll_all(
         conn,
-        PollConfig(jitter_seconds=(0.0, 0.0)),
+        PollConfig(),
         badge_cfg=_badge_cfg(max_retries=0),
     )
 
@@ -888,7 +888,7 @@ async def test_each_location_s_offer_is_kept_from_the_lists_the_poll_already_rea
         return _states((1, True), (2, False), *((b, False) for b in extra), progress=False)
 
     calls = _wire_poll(monkeypatch, {"gmebagholder": 100}, site_badges=site)
-    await poller_mod.poll_all(conn, PollConfig(jitter_seconds=(0.0, 0.0)))
+    await poller_mod.poll_all(conn, PollConfig())
 
     assert len(calls["site_badges"]) == 2
     assert _offer(conn, 38) == {1, 2, 125}
@@ -911,14 +911,14 @@ async def test_one_whole_answer_defines_a_location_and_none_leaves_it_alone(
         return _states((1, True), (2, False), progress=False)
 
     _wire_poll(monkeypatch, {"gmebagholder": 100, "kavo": 200}, site_badges=kavo_fails)
-    await poller_mod.poll_all(conn, PollConfig(jitter_seconds=(0.0, 0.0)))
+    await poller_mod.poll_all(conn, PollConfig())
     assert _offer(conn, 72) == {1, 2}            # replaced, not merged with 9
 
     def all_fail(handle, location_id):
         raise poller_mod.scraper.FetchError("HTTP 502")
 
     _wire_poll(monkeypatch, {"gmebagholder": 100, "kavo": 200}, site_badges=all_fail)
-    await poller_mod.poll_all(conn, PollConfig(jitter_seconds=(0.0, 0.0)))
+    await poller_mod.poll_all(conn, PollConfig())
     assert _offer(conn, 72) == {1, 2}            # untouched
 
 
@@ -960,7 +960,7 @@ async def test_a_rate_limited_badge_fetch_is_waited_out_not_lost(tmp_path, monke
     _proxy(monkeypatch, answer)
 
     counters = await poller_mod.poll_all(
-        conn, PollConfig(jitter_seconds=(0.0, 0.0)), badge_cfg=_badge_cfg()
+        conn, PollConfig(), badge_cfg=_badge_cfg()
     )
 
     assert attempts == ["gmebagholder", "gmebagholder"]
@@ -988,7 +988,7 @@ async def test_the_proxys_own_retry_after_beats_our_backoff(tmp_path, monkeypatc
     _proxy(monkeypatch, answer)
 
     await poller_mod.poll_all(
-        conn, PollConfig(jitter_seconds=(0.0, 0.0)), badge_cfg=_badge_cfg()
+        conn, PollConfig(), badge_cfg=_badge_cfg()
     )
 
     assert 47.0 in slept
@@ -1010,7 +1010,7 @@ async def test_retries_are_bounded_and_the_failure_is_still_counted(tmp_path, mo
 
     counters = await poller_mod.poll_all(
         conn,
-        PollConfig(jitter_seconds=(0.0, 0.0)),
+        PollConfig(),
         badge_cfg=_badge_cfg(max_retries=2),
     )
 
@@ -1037,7 +1037,7 @@ async def test_a_wait_longer_than_the_poll_can_afford_is_not_slept_off(tmp_path,
 
     counters = await poller_mod.poll_all(
         conn,
-        PollConfig(jitter_seconds=(0.0, 0.0)),
+        PollConfig(),
         badge_cfg=_badge_cfg(max_wait_seconds=120.0),
     )
 
@@ -1062,7 +1062,7 @@ async def test_only_a_429_is_retried(tmp_path, monkeypatch):
     _proxy(monkeypatch, answer)
 
     counters = await poller_mod.poll_all(
-        conn, PollConfig(jitter_seconds=(0.0, 0.0)), badge_cfg=_badge_cfg()
+        conn, PollConfig(), badge_cfg=_badge_cfg()
     )
 
     assert len(attempts) == 1
@@ -1162,7 +1162,7 @@ async def test_a_manual_poll_dates_its_visit_and_snapshot_to_the_same_local_day(
     pid = _insert_player(conn)
     totals = {"gmebagholder": 100}
     _wire_poll(monkeypatch, totals)
-    cfg = PollConfig(jitter_seconds=(0.0, 0.0))
+    cfg = PollConfig()
 
     # Nightly poll at 3am Pacific: yesterday's play.
     await poller_mod.poll_all(

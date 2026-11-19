@@ -5,7 +5,7 @@ from app import db as db_mod
 from app.config import PollConfig
 from app.scraper import LocationInfo, RoomGame, ScrapeError
 
-POLL = PollConfig(jitter_seconds=(0.0, 0.0))
+POLL = PollConfig()
 
 COQUITLAM = 38
 HOOPS = {"id": 10, "name": "Hoops"}

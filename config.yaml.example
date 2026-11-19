@@ -24,7 +24,6 @@ poll:
   timezone: "America/Vancouver"  # a manual refresh credits play to today here
   manual_cooldown_seconds: 600    # gap enforced on the public Refresh button
   request_timeout_sec: 20
-  jitter_seconds: [0.5, 2.0]  # min/max random delay between requests
   user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 
 badges:
@@ -40,8 +39,8 @@ badges:
   # the path is {api_base}/{handle}, and the request carries an Origin derived
   # from this URL because the host 403s without one.
   api_base: "https://www.activate-scores.ca/api/activate/badges"
-  # Still its own spacing rather than sharing poll.jitter_seconds, since this is
-  # the one leg that leaves playactivate.com. The old host allowed five handles
+  # The only spacing left in a poll (playactivate.com's own API is asked back to
+  # back), since this is the one leg that leaves playactivate.com. The old host allowed five handles
   # a minute; this one states X-RateLimit-Limit: 120 over a ~30s window, so a
   # couple of seconds apart is both quick and polite. A 429 is still waited out
   # rather than dropped — otherwise the handles at the back of the queue lose

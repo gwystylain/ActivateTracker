@@ -373,9 +373,10 @@ after came back `HTTP 429` in ~6ms — answered by a limiter, not by the upstrea
 still refusing 16 seconds after the first request. The current host is two orders of
 magnitude roomier and says so, returning `X-RateLimit-Limit: 120` with `Remaining` and a
 `Reset` that sat ~30s out when measured, so `badges.spacing_seconds` is down to a courteous
-1–3s. The leg keeps its own spacing rather than sharing `poll.jitter_seconds` because it is
-the one that leaves playactivate.com, and the machinery below stays for the same reason —
-the limit is somebody else's to change.
+1–3s. It is the only spacing left in a poll: playactivate.com's own API is asked back to back
+(there is no `poll.jitter_seconds` any more; a leftover key in an old config.yaml is ignored).
+The proxy keeps its spacing because it is the one leg that leaves playactivate.com, and the
+machinery below stays for the same reason — the limit is somebody else's to change.
 
 `scraper.RateLimited` exists to keep that apart from an ordinary `FetchError`: a 429 says
 nothing about the request and the same handle works later, where a 404 or 500 means stop
