@@ -90,6 +90,20 @@ try/catch because blocked storage throws on access and would otherwise take the 
 Switching metrics also has to dismiss any open tooltip (`chart.tooltip.setActiveElements([], ...)`)
 — Chart.js otherwise keeps rendering the previous metric's number until the pointer moves.
 
+### /api/brief: the Discord bot's roast
+`GET /api/brief?players=Ace,Bee&days=30` answers `{"text", "players", "as_of", "window_days"}`:
+`text` is Discord Markdown capped at 2000 characters, `players` the facts it was written from, for
+a bot that would rather word it itself. Each name matches a display name, any one handle or the
+id, ignoring case; a name it can't place comes back in a 404's `unknown` list, and hidden players
+can't be named. Public and read-only like the rest of `/api/`, since it recombines what `/` shows.
+
+`app/brief.py` splits `gather` (DB reads) from `render` (pure wording). A *session* is a
+`visits.visit_date`, and its badges and records are the ones whose `earned_on` / `_record_dates`
+day is that same play day — the three agree because all are `streak.poll_day`. Anything held since
+before tracking has no date and is never "recent". A player is slacking at `SLACK_DAYS` (7) without
+a visit or with no points in the window. Players are always named by display name. "Today" is the
+local date in `poll.timezone`, not the server's: by evening UTC it's already tomorrow.
+
 ### CSRF via body-replay middleware
 `security.CsrfMiddleware._peek_form` reads the request body once, parses it manually, then
 replaces `request._receive` with a closure that hands the same bytes back. Necessary because

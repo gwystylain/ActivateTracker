@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 
 from .. import badge_locations, badge_reference, badge_tips
 from .. import badge_export as badge_export_mod
+from .. import brief as brief_mod
 from .. import busy as busy_mod
 from .. import catalog as catalog_mod
 from .. import master_document
@@ -535,6 +536,60 @@ def _badge_payload(conn) -> tuple[dict[str, Any], list[dict[str, Any]]]:
             for loc in locations
         ],
     }, locations
+
+
+@router.get("/api/brief")
+async def player_brief(request: Request, players: str = "", days: int = 30) -> JSONResponse:
+    """A rude summary of chosen players for a Discord bot to post.
+
+    `players` is comma-separated; each name matches a player's display name,
+    any one of their handles, or their id, ignoring case. Everyone visible when
+    absent. Hidden players can't be named, the same as everywhere else public.
+    Answers `{"text": <Discord Markdown>, "players": [facts...]}` — the facts
+    for a bot that would rather write its own, the text for one that wouldn't.
+    """
+    cfg = request.app.state.config
+    conn = request.app.state.db
+    rows = conn.execute(
+        """
+        SELECT id, handle, display_name, initial_streak, initial_streak_set_at
+        FROM players WHERE hidden = 0 ORDER BY id
+        """
+    ).fetchall()
+
+    index: dict[str, Any] = {}
+    for r in rows:
+        keys = [str(r["id"]), *(h.strip() for h in r["handle"].split(","))]
+        if r["display_name"]:
+            keys.append(r["display_name"])
+        for k in keys:
+            index.setdefault(k.strip().casefold(), r)
+
+    wanted = [t.strip() for t in players.split(",") if t.strip()]
+    unknown = [t for t in wanted if t.casefold() not in index]
+    if unknown:
+        return JSONResponse({"error": "unknown players", "unknown": unknown}, status_code=404)
+    chosen = list({index[t.casefold()]["id"]: index[t.casefold()] for t in wanted}.values())
+    chosen = chosen or rows
+    if not chosen:
+        return JSONResponse({"error": "no players tracked"}, status_code=404)
+
+    days = max(1, min(days, 365))
+    # The venues' date, not the server's: by evening UTC is already tomorrow,
+    # and every "days ago" would be one too many.
+    today = datetime.now(ZoneInfo(cfg.poll.timezone)).date()
+    briefs = brief_mod.gather(
+        conn, chosen, records=_build_records(conn), today=today, window_days=days
+    )
+    return JSONResponse(
+        {
+            "as_of": today.isoformat(),
+            "window_days": days,
+            "text": brief_mod.render(briefs, window_days=days),
+            "players": [b.to_json() for b in briefs],
+        },
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.get("/api/game-data")
